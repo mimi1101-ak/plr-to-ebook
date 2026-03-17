@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(export:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npx next:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(ls:*)",
+      "Bash(taskkill:*)",
+      "Bash(npm run:*)"
+    ]
+  }
+}

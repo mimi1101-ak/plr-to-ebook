@@ -1,0 +1,41 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // 원본 파일
+  originalFileName String
+  originalFileUrl  String
+  fileType         String // "docx" | "pdf"
+  fileSize         Int
+
+  // 템플릿 설정
+  writingStyle     String  @default("professional") // professional | casual | academic | storytelling
+  tocFormat        String  @default("numbered")     // numbered | bulleted | none
+  sentenceStructure String @default("medium")       // short | medium | long
+
+  // 변환 상태 (PENDING | PROCESSING | COMPLETED | FAILED)
+  status      String  @default("PENDING")
+  progress    Int     @default(0) // 0~100
+
+  // 결과물
+  ebookTitle    String?
+  ebookContent  String?
+  ebookFileUrl  String?
+  pageCount     Int?
+  wordCount     Int?
+  errorMessage  String?
+}
