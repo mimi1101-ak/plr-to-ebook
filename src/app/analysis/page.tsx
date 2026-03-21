@@ -65,17 +65,18 @@ export default function AnalysisPage() {
       return;
     }
 
-    setLoadingMsg("AI가 원고를 분석하고 있습니다...");
+    setLoadingMsg("요약 생성 중...");
 
-    // 2단계: 실제 Claude 호출 (fire-and-forget)
+    // 2단계: 요약 생성 (fire-and-forget)
     fetch(`/api/projects/${projectId}/analyze/run`, { method: "POST" }).catch(() => {});
 
     // 3단계: 폴링 시작
-    pollStatus(projectId);
+    pollStatus(projectId, false);
   }
 
-  function pollStatus(projectId: string) {
-    const check = async () => {
+  // targetsTriggered: 타겟층 API를 이미 호출했는지 여부 (중복 호출 방지)
+  function pollStatus(projectId: string, targetsTriggered: boolean) {
+    const check = async (alreadyTriggered: boolean) => {
       try {
         const res = await fetch(`/api/projects/${projectId}/analyze/status`);
         if (!res.ok) throw new Error("폴링 실패");
@@ -93,15 +94,22 @@ export default function AnalysisPage() {
           return; // 폴링 종료
         }
 
-        // "processing" 상태 → 계속 폴링
-        pollTimerRef.current = setTimeout(check, POLL_INTERVAL);
+        // 요약 완료 → 타겟층 생성 트리거 (한 번만)
+        if (data.status === "summary_done" && !alreadyTriggered) {
+          setLoadingMsg("타겟층 분석 중...");
+          fetch(`/api/projects/${projectId}/analyze/targets`, { method: "POST" }).catch(() => {});
+          pollTimerRef.current = setTimeout(() => check(true), POLL_INTERVAL);
+          return;
+        }
+
+        // "processing" 또는 "summary_done" 상태 → 계속 폴링
+        pollTimerRef.current = setTimeout(() => check(alreadyTriggered), POLL_INTERVAL);
       } catch {
-        // 네트워크 오류 시 재시도
-        pollTimerRef.current = setTimeout(check, POLL_INTERVAL);
+        pollTimerRef.current = setTimeout(() => check(alreadyTriggered), POLL_INTERVAL);
       }
     };
 
-    check();
+    check(targetsTriggered);
   }
 
   const handleNext = () => {
@@ -140,13 +148,20 @@ export default function AnalysisPage() {
               <p className="mt-1 text-xs text-gray-400">최대 30초 정도 소요될 수 있습니다</p>
             </div>
             <div className="flex gap-2 mt-2 flex-wrap justify-center">
-              {["원고 내용 파악", "핵심 주제 추출", "타겟층 분석"].map((s, i) => (
+              {[
+                { label: "원고 내용 파악", done: loadingMsg.includes("타겟층") || loadingMsg.includes("완료") },
+                { label: "핵심 주제 요약", done: loadingMsg.includes("타겟층") || loadingMsg.includes("완료") },
+                { label: "타겟층 분석", done: false },
+              ].map(({ label, done }, i) => (
                 <span
                   key={i}
-                  className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-500"
-                  style={{ animation: `pulse 1.5s ease-in-out ${i * 0.4}s infinite` }}
+                  className={`rounded-full px-3 py-1 text-xs flex items-center gap-1 ${
+                    done ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-500"
+                  }`}
+                  style={done ? undefined : { animation: `pulse 1.5s ease-in-out ${i * 0.4}s infinite` }}
                 >
-                  {s}
+                  {done && "✓ "}
+                  {label}
                 </span>
               ))}
             </div>

@@ -5,10 +5,10 @@ import Anthropic from "@anthropic-ai/sdk";
 export const maxDuration = 60;
 
 /**
- * POST /api/projects/[id]/analyze/run
- * 1단계: 요약만 생성 (max_tokens: 180 → ~2s, 타임아웃 안전)
- * 완료 후 status = "summary_done"으로 저장.
- * 프론트가 이 상태를 감지하면 /analyze/targets 호출.
+ * POST /api/projects/[id]/analyze/targets
+ * 2단계: 타겟층 3개 생성 (max_tokens: 380 → ~4s, 타임아웃 안전)
+ * /analyze/run 완료(status: summary_done) 후 호출.
+ * 완료 후 status = "done"으로 저장.
  */
 export async function POST(
   _request: NextRequest,
@@ -21,8 +21,14 @@ export async function POST(
     }
 
     const existing = JSON.parse(((project as any).analysisData as string | null) ?? "{}");
-    if (existing.status === "summary_done" || existing.status === "done") {
+    if (existing.status === "done") {
       return NextResponse.json({ done: true });
+    }
+
+    const summary: string = existing.summary ?? "";
+    if (!summary) {
+      await markFailed(params.id, "요약 없음 — /analyze/run 먼저 호출하세요");
+      return NextResponse.json({ message: "요약 없음" }, { status: 400 });
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -31,32 +37,37 @@ export async function POST(
       return NextResponse.json({ message: "ANTHROPIC_API_KEY 없음" }, { status: 500 });
     }
 
-    const originalText = ((project as any).originalText as string | null) ?? "";
-    // 1500자만 사용 → 프롬프트 토큰 절감
-    const textSample = originalText.slice(0, 1500);
+    const prompt = `"${summary}" 내용의 전자책을 구매할 타겟층 3개를 JSON 배열로만 출력하세요. 설명 없이 배열만.
 
-    const prompt = `아래 PLR 원고를 200자 이내로 요약해주세요. 핵심 주제만. 요약문만 출력, 부연 설명 없이.
-
-${textSample}`;
+[
+  { "name": "타겟층명(10자 이내)", "characteristics": "특징(40자 이내)", "needs": "핵심 니즈(35자 이내)", "purchaseMotivation": "구매 동기(35자 이내)" },
+  { ... },
+  { ... }
+]`;
 
     const client = new Anthropic({ apiKey: apiKey.trim() });
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 180,
+      max_tokens: 380,
       messages: [{ role: "user", content: prompt }],
     });
 
-    const summary = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "[]";
+    const arrayMatch = raw.match(/\[[\s\S]*\]/);
+    if (!arrayMatch) throw new Error("JSON 배열 파싱 실패: " + raw.slice(0, 100));
+    const targetAudiences = JSON.parse(arrayMatch[0]);
 
     await prisma.project.update({
       where: { id: params.id },
-      data: { analysisData: JSON.stringify({ status: "summary_done", summary }) } as any,
+      data: {
+        analysisData: JSON.stringify({ status: "done", summary, targetAudiences }),
+      } as any,
     });
 
-    console.log(`[ANALYZE/RUN] 요약 완료 — ${summary.length}자`);
+    console.log(`[ANALYZE/TARGETS] 완료 — 타겟층 ${targetAudiences.length}개`);
     return NextResponse.json({ done: true });
   } catch (error) {
-    console.error("[ANALYZE/RUN] 오류:", error);
+    console.error("[ANALYZE/TARGETS] 오류:", error);
     await markFailed(params.id, String(error));
     return NextResponse.json({ message: String(error) }, { status: 500 });
   }
