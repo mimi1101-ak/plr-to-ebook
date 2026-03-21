@@ -44,17 +44,17 @@ export async function POST(
       messages: [
         {
           role: "user",
-          content: `"${summary}" 내용의 전자책을 구매할 타겟층 3개를 JSON 배열로 출력하라. name(10자), characteristics(40자), needs(35자), purchaseMotivation(35자).`,
-        },
-        {
-          role: "assistant",
-          content: "[",
+          content: `아래 내용의 전자책을 구매할 타겟층 3개를 JSON 배열로만 출력하라. 다른 텍스트 없이 배열만.
+
+내용: "${summary}"
+
+출력 형식:
+[{"name":"타겟층명","characteristics":"특징(40자)","needs":"핵심니즈(35자)","purchaseMotivation":"구매동기(35자)"},{"name":"...","characteristics":"...","needs":"...","purchaseMotivation":"..."},{"name":"...","characteristics":"...","needs":"...","purchaseMotivation":"..."}]`,
         },
       ],
     });
 
-    const partial = response.content[0].type === "text" ? response.content[0].text.trim() : "";
-    const raw = "[" + partial;
+    const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
 
     // JSON 배열 파싱 (잘린 경우 완성된 객체만 추출)
     let targetAudiences: unknown[] = [];

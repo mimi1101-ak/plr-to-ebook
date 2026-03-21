@@ -33,8 +33,6 @@ export async function POST(
     const analysisData = JSON.parse(((project as any).analysisData as string | null) ?? "{}");
     const summary = (analysisData.summary ?? ((project as any).originalText as string | null ?? "")).slice(0, 300);
 
-    // 프롬프트: JSON 배열만 반환하도록 명확하게 지시
-    // assistant 턴에 "[" 를 미리 채워 Claude가 배열로 시작하도록 강제
     const client = new Anthropic({ apiKey: apiKey.trim() });
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
@@ -42,18 +40,17 @@ export async function POST(
       messages: [
         {
           role: "user",
-          content: `"${targetAudience}" 독자를 위한 전자책 제목 10개를 JSON 배열로 출력하라. 각 제목은 20자 이내. 원고 요약: ${summary}`,
-        },
-        {
-          role: "assistant",
-          content: "[",  // 배열 시작 강제 → Claude가 반드시 배열로 응답
+          content: `"${targetAudience}" 독자를 위한 전자책 제목 10개를 아래 형식의 JSON 배열로만 출력하라. 다른 텍스트 없이 배열만. 각 제목 20자 이내.
+
+원고 요약: ${summary}
+
+출력 형식:
+["제목1","제목2","제목3","제목4","제목5","제목6","제목7","제목8","제목9","제목10"]`,
         },
       ],
     });
 
-    // Claude가 "[" 이후부터 응답하므로 앞에 "[" 를 붙여서 완성
-    const partial = response.content[0].type === "text" ? response.content[0].text.trim() : "";
-    const raw = "[" + partial;
+    const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
 
     const titles = parseTitles(raw);
 

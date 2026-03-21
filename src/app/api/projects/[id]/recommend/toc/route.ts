@@ -36,18 +36,17 @@ export async function POST(
       messages: [
         {
           role: "user",
-          content: `"${targetAudience}"를 위한 전자책 목차 구조 3개를 JSON 배열로 출력하라. 각 구조는 5개 챕터, 소제목 2개씩. 원고 요약: ${summary}`,
-        },
-        {
-          role: "assistant",
-          // 배열 시작 강제 → Claude가 반드시 배열 내용부터 응답
-          content: `[{"id":"1","chapters":[`,
+          content: `"${targetAudience}"를 위한 전자책 목차 구조 3개를 아래 형식의 JSON 배열로만 출력하라. 다른 텍스트 없이 배열만. 각 구조는 챕터 5개, 소제목 2개씩.
+
+원고 요약: ${summary}
+
+출력 형식:
+[{"id":"1","chapters":[{"type":"chapter","number":1,"title":"챕터명","subtitles":["소제목1","소제목2"]},{"type":"chapter","number":2,"title":"챕터명","subtitles":["소제목1","소제목2"]},{"type":"chapter","number":3,"title":"챕터명","subtitles":["소제목1","소제목2"]},{"type":"chapter","number":4,"title":"챕터명","subtitles":["소제목1","소제목2"]},{"type":"chapter","number":5,"title":"챕터명","subtitles":["소제목1","소제목2"]}]},{"id":"2","chapters":[...]},{"id":"3","chapters":[...]}]`,
         },
       ],
     });
 
-    const partial = response.content[0].type === "text" ? response.content[0].text.trim() : "";
-    const raw = `[{"id":"1","chapters":[` + partial;
+    const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
 
     const tocOptions = parseTocOptions(raw);
 
