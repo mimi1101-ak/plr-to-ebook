@@ -18,17 +18,16 @@ interface TocOption {
   chapters: TocChapter[];
 }
 
-interface RecommendResult {
-  titles: string[];
-  tocOptions: TocOption[];
-}
+type LoadPhase = "titles" | "toc" | "done";
 
 export default function TocPage() {
   const router = useRouter();
   const { currentProjectId, targetAudience } = useAppStore();
 
-  const [isLoading, setIsLoading] = useState(true);
-  const [recommend, setRecommend] = useState<RecommendResult | null>(null);
+  const [loadPhase, setLoadPhase] = useState<LoadPhase>("titles");
+  const [titles, setTitles] = useState<string[]>([]);
+  const [tocOptions, setTocOptions] = useState<TocOption[]>([]);
+  const isLoading = loadPhase !== "done";
 
   // 선택 상태
   const [selectedTitleIdx, setSelectedTitleIdx] = useState<number | null>(null);
@@ -49,44 +48,64 @@ export default function TocPage() {
     if (!targetAudience) { router.push("/analysis"); return; }
     if (calledRef.current) return;
     calledRef.current = true;
+    loadRecommendations(currentProjectId, targetAudience);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProjectId, targetAudience]);
 
-    fetch(`/api/projects/${currentProjectId}/recommend`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetAudience }),
-    })
-      .then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.message ?? "추천 생성 실패");
-        }
-        return res.json();
-      })
-      .then((data: RecommendResult) => {
-        setRecommend(data);
-      })
-      .catch((e) => {
-        toast.error(e instanceof Error ? e.message : "추천 생성에 실패했습니다.");
-        router.push("/analysis");
-      })
-      .finally(() => setIsLoading(false));
-  }, [currentProjectId, targetAudience, router]);
+  async function loadRecommendations(projectId: string, audience: string) {
+    const body = JSON.stringify({ targetAudience: audience });
+    const headers = { "Content-Type": "application/json" };
+
+    // 1단계: 제목 10개 생성 (~2s)
+    try {
+      setLoadPhase("titles");
+      const res = await fetch(`/api/projects/${projectId}/recommend/titles`, { method: "POST", headers, body });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message ?? "제목 생성 실패");
+      }
+      const { titles: t } = await res.json();
+      setTitles(t);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "제목 생성에 실패했습니다.");
+      router.push("/analysis");
+      return;
+    }
+
+    // 2단계: 목차 구조 3개 생성 (~5s)
+    try {
+      setLoadPhase("toc");
+      const res = await fetch(`/api/projects/${projectId}/recommend/toc`, { method: "POST", headers, body });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message ?? "목차 생성 실패");
+      }
+      const { tocOptions: t } = await res.json();
+      setTocOptions(t);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "목차 생성에 실패했습니다.");
+      router.push("/analysis");
+      return;
+    }
+
+    setLoadPhase("done");
+  }
 
   // 제목 선택 시 editTitle 동기화
   useEffect(() => {
     if (useCustomTitle) {
       setEditTitle(customTitle);
-    } else if (selectedTitleIdx !== null && recommend) {
-      setEditTitle(recommend.titles[selectedTitleIdx] ?? "");
+    } else if (selectedTitleIdx !== null) {
+      setEditTitle(titles[selectedTitleIdx] ?? "");
     }
-  }, [selectedTitleIdx, useCustomTitle, customTitle, recommend]);
+  }, [selectedTitleIdx, useCustomTitle, customTitle, titles]);
 
   // TOC 선택 시 editChapters 동기화
   useEffect(() => {
-    if (!selectedTocId || !recommend) return;
-    const opt = recommend.tocOptions.find((o) => o.id === selectedTocId);
+    if (!selectedTocId) return;
+    const opt = tocOptions.find((o) => o.id === selectedTocId);
     if (opt) setEditChapters(opt.chapters.map((ch) => ({ ...ch, subtitles: [...ch.subtitles] })));
-  }, [selectedTocId, recommend]);
+  }, [selectedTocId, tocOptions]);
 
   const handleConfirm = async () => {
     if (!currentProjectId) return;
@@ -157,6 +176,7 @@ export default function TocPage() {
     selectedTocId !== null;
 
   if (isLoading) {
+    const phaseLabel = loadPhase === "titles" ? "제목 10개 생성 중..." : "목차 구조 생성 중...";
     return (
       <div className="min-h-screen bg-gray-50">
         <Header />
@@ -171,15 +191,24 @@ export default function TocPage() {
               <h1 className="text-xl font-bold text-gray-900">
                 <span className="text-purple-600">"{targetAudience}"</span> 타겟층에 맞는<br />제목과 목차를 추천하고 있습니다
               </h1>
-              <p className="mt-2 text-sm text-gray-500">잠시만 기다려 주세요...</p>
+              <p className="mt-2 text-sm text-gray-500">{phaseLabel}</p>
+            </div>
+            <div className="flex gap-3">
+              {[
+                { label: "제목 10개", done: loadPhase === "toc" },
+                { label: "목차 구조", done: false },
+              ].map(({ label, done }, i) => (
+                <span key={i} className={`rounded-full px-3 py-1 text-xs flex items-center gap-1 ${done ? "bg-green-100 text-green-600" : "bg-gray-100 text-gray-500"}`}
+                  style={done ? undefined : { animation: `pulse 1.5s ease-in-out ${i * 0.4}s infinite` }}>
+                  {done ? "✓ " : ""}{label}
+                </span>
+              ))}
             </div>
           </div>
         </main>
       </div>
     );
   }
-
-  if (!recommend) return null;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -204,7 +233,7 @@ export default function TocPage() {
             제목 선택
           </h2>
           <div className="grid grid-cols-2 gap-2">
-            {recommend.titles.map((title, idx) => (
+            {titles.map((title, idx) => (
               <button
                 key={idx}
                 onClick={() => { setSelectedTitleIdx(idx); setUseCustomTitle(false); }}
@@ -247,7 +276,7 @@ export default function TocPage() {
             목차 구조 선택
           </h2>
           <div className="space-y-2">
-            {recommend.tocOptions.map((opt) => {
+            {tocOptions.map((opt) => {
               const isSelected = selectedTocId === opt.id;
               const isExpanded = expandedTocId === opt.id;
               const preview = opt.chapters.filter((ch) => ch.type === "chapter").slice(0, 3);
