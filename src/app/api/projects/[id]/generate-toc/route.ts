@@ -17,27 +17,15 @@ export async function POST(
       return NextResponse.json({ message: "API 키가 설정되지 않았습니다." }, { status: 500 });
     }
 
-    // 원본 파일 텍스트 추출
-    let originalText = "";
-    try {
-      const buffer = await loadFileBuffer(project.originalFileUrl);
-      if (project.fileType === "docx") {
-        const mammoth = await import("mammoth");
-        const result = await mammoth.extractRawText({ buffer });
-        originalText = result.value.trim();
-      } else {
-        const pdfParse = (await import("pdf-parse")).default;
-        const data = await pdfParse(buffer);
-        originalText = data.text.trim();
-      }
-    } catch (err) {
-      console.error("[generate-toc] 파일 추출 실패:", err);
-      return NextResponse.json({ message: "파일 텍스트 추출에 실패했습니다." }, { status: 400 });
-    }
-
+    // DB에서 업로드 시 추출된 원문 텍스트 읽기
+    const originalText = (project as any).originalText as string | null;
     if (!originalText) {
-      return NextResponse.json({ message: "파일에서 텍스트를 추출할 수 없습니다." }, { status: 400 });
+      return NextResponse.json(
+        { message: "원문 텍스트가 없습니다. 파일을 다시 업로드해 주세요." },
+        { status: 400 }
+      );
     }
+    console.log(`[generate-toc] originalText 로드 완료 — ${originalText.length}자`);
 
     const client = new Anthropic({ apiKey: apiKey.trim() });
 
@@ -99,11 +87,4 @@ ${originalText.slice(0, 8000)}`;
     console.error("[generate-toc] 오류:", error);
     return NextResponse.json({ message: "서버 오류가 발생했습니다." }, { status: 500 });
   }
-}
-
-async function loadFileBuffer(fileUrl: string): Promise<Buffer> {
-  const { downloadFile } = await import("@/lib/supabase");
-  const urlPath = new URL(fileUrl).pathname;
-  const filePath = urlPath.split("/plr-files/")[1];
-  return downloadFile(filePath);
 }

@@ -96,33 +96,12 @@ async function convertInBackground(projectId: string, project: any) {
   try {
     await updateProgress(projectId, 10);
 
-    // 1. 원본 파일 텍스트 추출
-    let originalText = "";
-    try {
-      const buffer = await loadFileBuffer(project.originalFileUrl);
-      if (project.fileType === "docx") {
-        const mammoth = await import("mammoth");
-        const result = await mammoth.extractRawText({ buffer });
-        originalText = result.value.trim();
-        console.log(`[EXTRACT] docx 추출 완료 — ${originalText.length}자`);
-      } else {
-        const pdfParse = (await import("pdf-parse")).default;
-        const data = await pdfParse(buffer);
-        originalText = data.text.trim();
-        console.log(`[EXTRACT] pdf 추출 완료 — ${originalText.length}자`);
-      }
-    } catch (extractError) {
-      console.error("[EXTRACT] 파일 추출 실패:", extractError);
-      throw new Error(
-        `파일 텍스트 추출에 실패했습니다: ${extractError instanceof Error ? extractError.message : String(extractError)}`
-      );
-    }
-
+    // 1. DB에서 업로드 시 추출된 원문 텍스트 읽기
+    const originalText = (project as any).originalText as string | null;
     if (!originalText) {
-      throw new Error(
-        "파일에서 텍스트를 추출할 수 없습니다. 스캔 이미지 PDF이거나 빈 문서일 수 있습니다."
-      );
+      throw new Error("원문 텍스트가 없습니다. 파일을 다시 업로드해 주세요.");
     }
+    console.log(`[CONVERT] originalText 로드 완료 — ${originalText.length}자`);
 
     await updateProgress(projectId, 25);
 
@@ -310,10 +289,3 @@ ${originalText.slice(0, 12000)}`;
   }
 }
 
-async function loadFileBuffer(fileUrl: string): Promise<Buffer> {
-  const { downloadFile } = await import("@/lib/supabase");
-  const urlPath = new URL(fileUrl).pathname;
-  const filePath = urlPath.split("/plr-files/")[1];
-  console.log(`[EXTRACT] Supabase 파일 다운로드: ${filePath}`);
-  return downloadFile(filePath);
-}

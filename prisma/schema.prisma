@@ -18,9 +18,10 @@ model Project {
 
   // 원본 파일
   originalFileName String
-  originalFileUrl  String
-  fileType         String // "docx" | "pdf"
+  originalFileUrl  String  @default("") // 더 이상 사용하지 않음 (하위 호환용)
+  fileType         String  // "docx" | "pdf"
   fileSize         Int
+  originalText     String? // 업로드 시 메모리에서 추출한 원문 텍스트
 
   // 템플릿 설정
   writingStyle     String  @default("professional") // professional | casual | academic | storytelling

@@ -9,7 +9,13 @@
       "Bash(netstat:*)",
       "Bash(ls:*)",
       "Bash(taskkill:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(npx prisma:*)",
+      "Bash(set -a)",
+      "Bash(source .env.local)",
+      "Bash(node -e \":*)",
+      "Bash(node -e \"const p = require\\(''./node_modules/@supabase/supabase-js/package.json''\\); console.log\\(''supabase-js version:'', p.version\\)\")",
+      "Bash(node -e \"require\\(''fs''\\).writeFileSync\\(''test_upload.docx'', Buffer.alloc\\(200*1024, 120\\)\\); console.log\\(''created''\\)\")"
     ]
   }
 }

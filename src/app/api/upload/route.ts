@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { generateUniqueFileName, MAX_FILE_SIZE } from "@/lib/utils";
+import { MAX_FILE_SIZE } from "@/lib/utils";
 
 export async function POST(request: NextRequest) {
   try {
@@ -37,11 +37,6 @@ export async function POST(request: NextRequest) {
     }
 
     const fileType = isDocx ? "docx" : "pdf";
-    const contentType = isDocx
-      ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-      : "application/pdf";
-    const uniqueFileName = generateUniqueFileName(file.name);
-    console.log(`[UPLOAD] fileType=${fileType}, uniqueFileName=${uniqueFileName}`);
 
     // 4. Buffer 변환
     let buffer: Buffer;
@@ -53,31 +48,46 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ message: "파일 읽기에 실패했습니다.", detail: String(e) }, { status: 500 });
     }
 
-    // 5. Supabase Storage 업로드
-    console.log("[UPLOAD] Supabase 업로드 시도...");
-    let fileUrl: string;
+    // 5. 메모리에서 텍스트 추출 (파일 저장 없음)
+    console.log(`[UPLOAD] 텍스트 추출 시작 (${fileType})`);
+    let originalText = "";
     try {
-      const { uploadFile } = await import("@/lib/supabase");
-      fileUrl = await uploadFile(buffer, `originals/${uniqueFileName}`, contentType);
-      console.log(`[UPLOAD] Supabase 업로드 성공: ${fileUrl}`);
+      if (isDocx) {
+        const mammoth = await import("mammoth");
+        const result = await mammoth.extractRawText({ buffer });
+        originalText = result.value.trim();
+      } else {
+        const pdfParse = (await import("pdf-parse")).default;
+        const data = await pdfParse(buffer);
+        originalText = data.text.trim();
+      }
+      console.log(`[UPLOAD] 텍스트 추출 완료: ${originalText.length}자`);
     } catch (e) {
-      console.error("[UPLOAD] Supabase 업로드 실패:", e);
+      console.error("[UPLOAD] 텍스트 추출 실패:", e);
       return NextResponse.json(
-        { message: "파일 업로드에 실패했습니다.", detail: String(e) },
-        { status: 500 }
+        { message: "파일에서 텍스트를 추출할 수 없습니다. 스캔 이미지 PDF이거나 손상된 파일일 수 있습니다.", detail: String(e) },
+        { status: 422 }
       );
     }
 
-    // 6. DB에 프로젝트 생성
+    if (!originalText) {
+      return NextResponse.json(
+        { message: "파일에서 텍스트를 추출할 수 없습니다. 텍스트 레이어가 없는 파일입니다." },
+        { status: 422 }
+      );
+    }
+
+    // 6. DB에 프로젝트 생성 (텍스트 포함, 파일 URL 없음)
     console.log("[UPLOAD] DB 프로젝트 생성 중...");
     let project: Awaited<ReturnType<typeof prisma.project.create>>;
     try {
       project = await prisma.project.create({
         data: {
           originalFileName: file.name,
-          originalFileUrl: fileUrl,
+          originalFileUrl: "",
           fileType,
           fileSize: file.size,
+          originalText,
           status: "PENDING",
         },
       });
@@ -93,9 +103,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       projectId: project.id,
       fileName: file.name,
-      fileUrl,
       fileSize: file.size,
       fileType,
+      textLength: originalText.length,
     });
   } catch (error) {
     console.error("[UPLOAD] 예상치 못한 오류:", error);
