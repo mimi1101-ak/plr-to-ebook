@@ -72,7 +72,7 @@ export default function TemplatePage() {
       if (!response.ok) throw new Error("설정 저장에 실패했습니다.");
 
       toast.success("템플릿 설정 완료!");
-      router.push("/processing");
+      router.push("/toc");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "오류가 발생했습니다.");
     } finally {
@@ -249,9 +249,9 @@ export default function TemplatePage() {
             ) : (
               <>
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M5 12h14M12 5l7 7-7 7" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-                AI 변환 시작하기
+                다음 단계: 목차 생성
               </>
             )}
           </button>

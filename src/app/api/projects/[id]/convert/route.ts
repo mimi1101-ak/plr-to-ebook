@@ -1,10 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { readFile } from "fs/promises";
-import path from "path";
 import { prisma } from "@/lib/prisma";
 import Anthropic from "@anthropic-ai/sdk";
-
-const LOCAL_UPLOAD_DIR = path.join(process.cwd(), "uploads");
 
 async function updateProgress(projectId: string, progress: number) {
   await prisma.project.update({
@@ -156,7 +152,38 @@ async function convertInBackground(projectId: string, project: any) {
 
     await updateProgress(projectId, 35);
 
-    // 3. Claude API 호출 — 이어쓰기 포함
+    // 3. 확정 목차 파싱 (있을 경우)
+    let confirmedToc: { bookTitle: string; sections: Array<{ type: string; number?: number; title: string; subtitles: string[] }> } | null = null;
+    if (project.tocData) {
+      try {
+        confirmedToc = JSON.parse(project.tocData as string);
+      } catch {
+        console.warn("[CONVERT] tocData 파싱 실패, 자동 생성으로 진행");
+      }
+    }
+
+    // 확정 목차 → 마크다운 목차 문자열 구성
+    let tocSection = "";
+    let structureGuide = "";
+    if (confirmedToc) {
+      const bookTitle = confirmedToc.bookTitle;
+      const tocLines = confirmedToc.sections.map((s) => {
+        if (s.type === "prologue") return `- 프롤로그: ${s.title}`;
+        if (s.type === "appendix") return `- 부록: ${s.title}`;
+        return `- ${s.number}장. ${s.title}`;
+      });
+      tocSection = `## 확정된 목차 (반드시 이 구조 그대로 작성)\n책 제목: ${bookTitle}\n${tocLines.join("\n")}`;
+
+      const structureLines = confirmedToc.sections.map((s) => {
+        const label =
+          s.type === "prologue" ? "프롤로그" : s.type === "appendix" ? "부록" : `${s.number}장`;
+        const subList = s.subtitles.map((st) => `  - ### ${st}`).join("\n");
+        return `### ${label}: ${s.title}\n${subList}`;
+      });
+      structureGuide = `## 각 장별 소제목 구조 (반드시 이 소제목을 사용)\n${structureLines.join("\n\n")}`;
+    }
+
+    // 4. Claude API 호출 — 이어쓰기 포함
     const prompt = `당신은 한국의 전문 전자책 작가입니다. 아래 원본 PLR 콘텐츠를 바탕으로 완성도 높은 한국어 전자책을 작성해주세요.
 
 ## 분량 및 구성 목표 (목표치에 맞춰 충분히 작성하세요 — 최소치가 아닌 목표치 기준)
@@ -186,41 +213,55 @@ async function convertInBackground(projectId: string, project: any) {
 - ${tocDescriptions[project.tocFormat] ?? tocDescriptions.numbered}
 - 전문적이고 자연스러운 한국어 사용
 
+${tocSection}
+
+${structureGuide}
+
 ## 출력 마크다운 구조 (이 형식을 정확히 따르세요)
 
 # [전자책 제목]
 
 ## 목차
-1. [챕터 1 제목]
-2. [챕터 2 제목]
-3. [챕터 3 제목]
-4. [챕터 4 제목]
-5. [챕터 5 제목]
-6. [챕터 6 제목]
-7. [챕터 7 제목]
-8. [챕터 8 제목]
-9. [챕터 9 제목]
-10. [챕터 10 제목]
+프롤로그: [제목]
+1장. [챕터 1 제목]
+2장. [챕터 2 제목]
+...
+부록: [제목]
 
 ---
 
-## 1. [챕터 1 제목]
+## 프롤로그: [제목]
+
+### [소제목 1]
+[본문 내용 — 구체적 사례·예시·불렛 포인트 포함, 충분히 서술]
+
+### [소제목 2]
+[본문 내용]
+
+### [소제목 3]
+[본문 내용]
+
+[다음 장으로 자연스럽게 이어지는 한두 문장]
+
+---
+
+## 1장. [챕터 1 제목]
 
 ### [소제목 1-1]
 [본문 내용 — 구체적 사례·예시·불렛 포인트 포함, 충분히 서술]
 
 ### [소제목 1-2]
-[본문 내용 — 구체적 사례·예시·불렛 포인트 포함, 충분히 서술]
+[본문 내용]
 
 ### [소제목 1-3]
-[본문 내용 — 구체적 사례·예시·불렛 포인트 포함, 충분히 서술]
+[본문 내용]
 
 [마지막 소제목 본문 끝. 이어서 다음 챕터로 자연스럽게 연결되는 한두 문장을 일반 텍스트로 작성.]
 
 ---
 
-## 2. [챕터 2 제목]
-(위와 동일한 구조로 10챕터 모두 완성. 각 챕터마다 목표 5,500자를 채우세요.)
+## 부록: [제목]
+(위와 동일한 구조로 모든 장 완성. 각 챕터마다 목표 5,500자를 채우세요.)
 
 ---
 
@@ -270,19 +311,9 @@ ${originalText.slice(0, 12000)}`;
 }
 
 async function loadFileBuffer(fileUrl: string): Promise<Buffer> {
-  const useSupabase =
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-    process.env.NEXT_PUBLIC_SUPABASE_URL !== "your-supabase-url-here";
-
-  if (useSupabase && fileUrl.startsWith("http")) {
-    const { downloadFile } = await import("@/lib/supabase");
-    const urlPath = new URL(fileUrl).pathname;
-    const filePath = urlPath.split("/plr-files/")[1];
-    return downloadFile(filePath);
-  }
-
-  const fileName = path.basename(fileUrl);
-  const localPath = path.join(LOCAL_UPLOAD_DIR, fileName);
-  console.log(`[EXTRACT] 로컬 파일 읽기: ${localPath}`);
-  return readFile(localPath);
+  const { downloadFile } = await import("@/lib/supabase");
+  const urlPath = new URL(fileUrl).pathname;
+  const filePath = urlPath.split("/plr-files/")[1];
+  console.log(`[EXTRACT] Supabase 파일 다운로드: ${filePath}`);
+  return downloadFile(filePath);
 }

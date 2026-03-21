@@ -6,6 +6,7 @@ import type {
   WritingStyle,
   TocFormat,
   SentenceStructure,
+  GeneratedToc,
 } from "@/types";
 
 interface AppState {
@@ -17,6 +18,7 @@ interface AppState {
     type: "docx" | "pdf";
   } | null;
   templateSettings: TemplateSettings;
+  generatedToc: GeneratedToc | null;
 
   // 액션
   setCurrentProjectId: (id: string | null) => void;
@@ -24,6 +26,7 @@ interface AppState {
   setWritingStyle: (style: WritingStyle) => void;
   setTocFormat: (format: TocFormat) => void;
   setSentenceStructure: (structure: SentenceStructure) => void;
+  setGeneratedToc: (toc: GeneratedToc | null) => void;
   resetProject: () => void;
 }
 
@@ -39,6 +42,7 @@ export const useAppStore = create<AppState>()(
       currentProjectId: null,
       uploadedFile: null,
       templateSettings: defaultTemplateSettings,
+      generatedToc: null,
 
       setCurrentProjectId: (id) => set({ currentProjectId: id }),
       setUploadedFile: (file) => set({ uploadedFile: file }),
@@ -57,11 +61,13 @@ export const useAppStore = create<AppState>()(
             sentenceStructure: structure,
           },
         })),
+      setGeneratedToc: (toc) => set({ generatedToc: toc }),
       resetProject: () =>
         set({
           currentProjectId: null,
           uploadedFile: null,
           templateSettings: defaultTemplateSettings,
+          generatedToc: null,
         }),
     }),
     {
@@ -70,6 +76,7 @@ export const useAppStore = create<AppState>()(
         currentProjectId: state.currentProjectId,
         uploadedFile: state.uploadedFile,
         templateSettings: state.templateSettings,
+        generatedToc: state.generatedToc,
       }),
     }
   )

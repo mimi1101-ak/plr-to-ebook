@@ -26,10 +26,11 @@ export async function PATCH(
 ) {
   try {
     const body = await request.json();
-    const { ebookTitle, ebookContent } = body;
+    const { ebookTitle, ebookContent, tocData } = body;
 
     const data: Record<string, unknown> = {};
     if (ebookTitle !== undefined) data.ebookTitle = ebookTitle;
+    if (tocData !== undefined) data.tocData = tocData;
     if (ebookContent !== undefined) {
       data.ebookContent = ebookContent;
       data.wordCount = ebookContent.length;

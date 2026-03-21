@@ -1,5 +1,18 @@
 export type ProjectStatus = "PENDING" | "PROCESSING" | "COMPLETED" | "FAILED";
 
+export interface TocSection {
+  id: string;
+  type: "prologue" | "chapter" | "appendix";
+  number?: number;
+  title: string;
+  subtitles: string[];
+}
+
+export interface GeneratedToc {
+  bookTitle: string;
+  sections: TocSection[];
+}
+
 export interface Chapter {
   id: string;
   number: number;

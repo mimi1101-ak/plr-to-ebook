@@ -102,7 +102,7 @@ export default function ProcessingPage() {
         {/* 타이틀 */}
         <div className="mb-10 text-center">
           <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold">3</span>
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold">4</span>
             AI 변환 중
           </div>
           <h1 className="text-2xl font-bold text-gray-900">

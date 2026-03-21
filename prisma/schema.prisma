@@ -31,6 +31,9 @@ model Project {
   status      String  @default("PENDING")
   progress    Int     @default(0) // 0~100
 
+  // 확정 목차 (JSON 문자열)
+  tocData       String?
+
   // 결과물
   ebookTitle    String?
   ebookContent  String?
