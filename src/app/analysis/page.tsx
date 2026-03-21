@@ -18,46 +18,96 @@ interface AnalysisResult {
   targetAudiences: TargetAudience[];
 }
 
+const POLL_INTERVAL = 2000; // 2초마다 폴링
+
 export default function AnalysisPage() {
   const router = useRouter();
   const { currentProjectId, setTargetAudience } = useAppStore();
 
   const [isLoading, setIsLoading] = useState(true);
+  const [loadingMsg, setLoadingMsg] = useState("분석 작업 초기화 중...");
   const [result, setResult] = useState<AnalysisResult | null>(null);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const [customInput, setCustomInput] = useState("");
   const [useCustom, setUseCustom] = useState(false);
   const [showFullSummary, setShowFullSummary] = useState(false);
+
   const calledRef = useRef(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 컴포넌트 언마운트 시 폴링 정리
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
-    if (!currentProjectId) {
-      router.push("/upload");
-      return;
-    }
+    if (!currentProjectId) { router.push("/upload"); return; }
     if (calledRef.current) return;
     calledRef.current = true;
 
-    fetch(`/api/projects/${currentProjectId}/analyze`, { method: "POST" })
-      .then(async (res) => {
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.message ?? "분석 실패");
+    startAnalysis(currentProjectId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentProjectId]);
+
+  async function startAnalysis(projectId: string) {
+    // 1단계: 작업 초기화 (즉시 반환)
+    try {
+      const res = await fetch(`/api/projects/${projectId}/analyze`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.message ?? "초기화 실패");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "초기화 실패");
+      router.push("/upload");
+      return;
+    }
+
+    setLoadingMsg("AI가 원고를 분석하고 있습니다...");
+
+    // 2단계: 실제 Claude 호출 (fire-and-forget)
+    fetch(`/api/projects/${projectId}/analyze/run`, { method: "POST" }).catch(() => {});
+
+    // 3단계: 폴링 시작
+    pollStatus(projectId);
+  }
+
+  function pollStatus(projectId: string) {
+    const check = async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/analyze/status`);
+        if (!res.ok) throw new Error("폴링 실패");
+        const data = await res.json();
+
+        if (data.status === "done") {
+          setResult({ summary: data.summary, targetAudiences: data.targetAudiences });
+          setIsLoading(false);
+          return; // 폴링 종료
         }
-        return res.json();
-      })
-      .then((data: AnalysisResult) => {
-        setResult(data);
-      })
-      .catch((e) => {
-        toast.error(e instanceof Error ? e.message : "내용 분석에 실패했습니다.");
-        router.push("/upload");
-      })
-      .finally(() => setIsLoading(false));
-  }, [currentProjectId, router]);
+
+        if (data.status === "failed") {
+          toast.error(data.error ?? "내용 분석에 실패했습니다.");
+          router.push("/upload");
+          return; // 폴링 종료
+        }
+
+        // "processing" 상태 → 계속 폴링
+        pollTimerRef.current = setTimeout(check, POLL_INTERVAL);
+      } catch {
+        // 네트워크 오류 시 재시도
+        pollTimerRef.current = setTimeout(check, POLL_INTERVAL);
+      }
+    };
+
+    check();
+  }
 
   const handleNext = () => {
-    const audience = useCustom ? customInput.trim() : (result?.targetAudiences[selectedIdx!]?.name ?? "");
+    const audience = useCustom
+      ? customInput.trim()
+      : (result?.targetAudiences[selectedIdx!]?.name ?? "");
     if (!audience) {
       toast.error("타겟층을 선택하거나 직접 입력해 주세요.");
       return;
@@ -76,20 +126,26 @@ export default function AnalysisPage() {
         <Header />
         <main className="mx-auto max-w-2xl px-4 py-20">
           <div className="flex flex-col items-center gap-6 text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-50">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="animate-spin text-brand-600">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="32" strokeDashoffset="12" />
-              </svg>
+            <div className="relative flex h-20 w-20 items-center justify-center">
+              <div className="absolute inset-0 rounded-full bg-brand-100 animate-ping opacity-30" />
+              <div className="flex h-16 w-16 items-center justify-center rounded-full bg-brand-50">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="none" className="animate-spin text-brand-600">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="32" strokeDashoffset="12" />
+                </svg>
+              </div>
             </div>
             <div>
               <h1 className="text-xl font-bold text-gray-900">AI가 파일 내용을 분석하고 있습니다</h1>
-              <p className="mt-2 text-sm text-gray-500">
-                원고를 읽고 요약 및 타겟층을 추천하고 있어요. 잠시만 기다려 주세요.
-              </p>
+              <p className="mt-2 text-sm text-gray-500">{loadingMsg}</p>
+              <p className="mt-1 text-xs text-gray-400">최대 30초 정도 소요될 수 있습니다</p>
             </div>
-            <div className="flex gap-2 mt-2">
-              {["내용 파악 중...", "타겟층 분석 중...", "추천 생성 중..."].map((s, i) => (
-                <span key={i} className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-500 animate-pulse" style={{ animationDelay: `${i * 0.3}s` }}>
+            <div className="flex gap-2 mt-2 flex-wrap justify-center">
+              {["원고 내용 파악", "핵심 주제 추출", "타겟층 분석"].map((s, i) => (
+                <span
+                  key={i}
+                  className="rounded-full bg-gray-100 px-3 py-1 text-xs text-gray-500"
+                  style={{ animation: `pulse 1.5s ease-in-out ${i * 0.4}s infinite` }}
+                >
                   {s}
                 </span>
               ))}
@@ -102,7 +158,10 @@ export default function AnalysisPage() {
 
   if (!result) return null;
 
-  const summaryPreview = result.summary.length > 300 ? result.summary.slice(0, 300) + "..." : result.summary;
+  const summaryPreview =
+    result.summary.length > 300
+      ? result.summary.slice(0, 300) + "..."
+      : result.summary;
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -121,9 +180,7 @@ export default function AnalysisPage() {
 
         {/* 요약 카드 */}
         <div className="card mb-6">
-          <div className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-bold text-gray-800">📄 원고 내용 요약</h2>
-          </div>
+          <h2 className="mb-2 text-sm font-bold text-gray-800">📄 원고 내용 요약</h2>
           <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-line">
             {showFullSummary ? result.summary : summaryPreview}
           </p>
@@ -185,7 +242,9 @@ export default function AnalysisPage() {
             <button
               onClick={() => setUseCustom(true)}
               className={`w-full rounded-xl border-2 p-4 text-left transition-all ${
-                useCustom ? "border-brand-500 bg-brand-50" : "border-dashed border-gray-200 bg-white hover:border-gray-300"
+                useCustom
+                  ? "border-brand-500 bg-brand-50"
+                  : "border-dashed border-gray-200 bg-white hover:border-gray-300"
               }`}
             >
               <div className="flex items-center gap-3">
