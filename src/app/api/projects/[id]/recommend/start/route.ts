@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 /**
- * POST /api/projects/[id]/analyze
- * Job 레코드를 생성하고 즉시 jobId 반환.
- * 실제 Claude 호출은 /analyze/run 에서 수행.
+ * POST /api/projects/[id]/recommend/start
+ * 제목/목차 추천 Job을 생성하고 즉시 jobId 반환.
+ * 실제 Claude 호출은 /recommend/titles → /recommend/toc 에서 수행.
  */
 export async function POST(
   _request: NextRequest,
@@ -16,9 +16,9 @@ export async function POST(
   }
 
   const job = await prisma.job.create({
-    data: { type: "analyze", projectId: params.id, status: "pending" },
+    data: { type: "recommend", projectId: params.id, status: "pending" },
   });
 
-  console.log(`[ANALYZE] Job 생성 — jobId: ${job.id}`);
+  console.log(`[RECOMMEND/START] Job 생성 — jobId: ${job.id}`);
   return NextResponse.json({ jobId: job.id });
 }

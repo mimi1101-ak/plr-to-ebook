@@ -50,3 +50,17 @@ model Project {
   wordCount     Int?
   errorMessage  String?
 }
+
+// 백그라운드 AI 작업 추적 (분석, 제목/목차 추천)
+model Job {
+  id        String   @id @default(cuid())
+  type      String   // "analyze" | "recommend"
+  projectId String
+  status    String   @default("pending")
+  // analyze:   pending → running → summary_done → done | failed
+  // recommend: pending → running → titles_done  → done | failed
+  result    String?  // JSON: 단계별 누적 결과
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

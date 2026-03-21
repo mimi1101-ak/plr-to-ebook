@@ -18,77 +18,122 @@ interface TocOption {
   chapters: TocChapter[];
 }
 
-type LoadPhase = "titles" | "toc" | "done";
+type LoadPhase = "starting" | "titles" | "toc" | "done";
+
+const POLL_INTERVAL = 5000; // 5초마다 폴링
 
 export default function TocPage() {
   const router = useRouter();
   const { currentProjectId, targetAudience } = useAppStore();
 
-  const [loadPhase, setLoadPhase] = useState<LoadPhase>("titles");
+  const [loadPhase, setLoadPhase] = useState<LoadPhase>("starting");
   const [titles, setTitles] = useState<string[]>([]);
   const [tocOptions, setTocOptions] = useState<TocOption[]>([]);
   const isLoading = loadPhase !== "done";
 
-  // 선택 상태
   const [selectedTitleIdx, setSelectedTitleIdx] = useState<number | null>(null);
   const [customTitle, setCustomTitle] = useState("");
   const [useCustomTitle, setUseCustomTitle] = useState(false);
   const [selectedTocId, setSelectedTocId] = useState<string | null>(null);
   const [expandedTocId, setExpandedTocId] = useState<string | null>(null);
 
-  // 편집 상태 (선택된 TOC를 편집 가능한 상태로 복사)
   const [editTitle, setEditTitle] = useState("");
   const [editChapters, setEditChapters] = useState<TocChapter[]>([]);
   const [isSaving, setIsSaving] = useState(false);
 
   const calledRef = useRef(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!currentProjectId) { router.push("/upload"); return; }
     if (!targetAudience) { router.push("/analysis"); return; }
     if (calledRef.current) return;
     calledRef.current = true;
-    loadRecommendations(currentProjectId, targetAudience);
+    startRecommend(currentProjectId, targetAudience);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProjectId, targetAudience]);
 
-  async function loadRecommendations(projectId: string, audience: string) {
-    const body = JSON.stringify({ targetAudience: audience });
-    const headers = { "Content-Type": "application/json" };
-
-    // 1단계: 제목 10개 생성 (~2s)
+  async function startRecommend(projectId: string, audience: string) {
+    // 1. Job 생성 → jobId 즉시 반환
+    let jobId: string;
     try {
-      setLoadPhase("titles");
-      const res = await fetch(`/api/projects/${projectId}/recommend/titles`, { method: "POST", headers, body });
+      const res = await fetch(`/api/projects/${projectId}/recommend/start`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.message ?? "제목 생성 실패");
+        throw new Error(err.message ?? "초기화 실패");
       }
-      const { titles: t } = await res.json();
-      setTitles(t);
+      const data = await res.json();
+      jobId = data.jobId;
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "제목 생성에 실패했습니다.");
+      toast.error(e instanceof Error ? e.message : "초기화 실패");
       router.push("/analysis");
       return;
     }
 
-    // 2단계: 목차 구조 3개 생성 (~5s)
-    try {
-      setLoadPhase("toc");
-      const res = await fetch(`/api/projects/${projectId}/recommend/toc`, { method: "POST", headers, body });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message ?? "목차 생성 실패");
-      }
-      const { tocOptions: t } = await res.json();
-      setTocOptions(t);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "목차 생성에 실패했습니다.");
-      router.push("/analysis");
-      return;
-    }
+    setLoadPhase("titles");
 
-    setLoadPhase("done");
+    // 2. 제목 생성 (fire-and-forget)
+    fetch(`/api/projects/${projectId}/recommend/titles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId, targetAudience: audience }),
+    }).catch(() => {});
+
+    // 3. /api/jobs/[jobId]/status 폴링 시작
+    pollJobStatus(projectId, jobId, audience, false);
+  }
+
+  function pollJobStatus(
+    projectId: string,
+    jobId: string,
+    audience: string,
+    tocTriggered: boolean
+  ) {
+    const check = async (alreadyTriggered: boolean) => {
+      try {
+        const res = await fetch(`/api/jobs/${jobId}/status`);
+        if (!res.ok) throw new Error("폴링 실패");
+        const data = await res.json();
+
+        if (data.status === "done") {
+          const r = data.result as { titles: string[]; tocOptions: TocOption[] };
+          setTitles(r.titles ?? []);
+          setTocOptions(r.tocOptions ?? []);
+          setLoadPhase("done");
+          return;
+        }
+
+        if (data.status === "failed") {
+          toast.error(data.error ?? "추천 생성에 실패했습니다.");
+          router.push("/analysis");
+          return;
+        }
+
+        // 제목 완료 → 목차 생성 트리거 (한 번만)
+        if (data.status === "titles_done" && !alreadyTriggered) {
+          setLoadPhase("toc");
+          fetch(`/api/projects/${projectId}/recommend/toc`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jobId, targetAudience: audience }),
+          }).catch(() => {});
+          pollTimerRef.current = setTimeout(() => check(true), POLL_INTERVAL);
+          return;
+        }
+
+        pollTimerRef.current = setTimeout(() => check(alreadyTriggered), POLL_INTERVAL);
+      } catch {
+        pollTimerRef.current = setTimeout(() => check(alreadyTriggered), POLL_INTERVAL);
+      }
+    };
+
+    check(tocTriggered);
   }
 
   // 제목 선택 시 editTitle 동기화
@@ -176,7 +221,10 @@ export default function TocPage() {
     selectedTocId !== null;
 
   if (isLoading) {
-    const phaseLabel = loadPhase === "titles" ? "제목 10개 생성 중..." : "목차 구조 생성 중...";
+    const phaseLabel =
+      loadPhase === "starting" ? "초기화 중..." :
+      loadPhase === "titles" ? "제목 10개 생성 중..." :
+      "목차 구조 생성 중...";
     return (
       <div className="min-h-screen bg-gray-50">
         <Header />
@@ -214,7 +262,6 @@ export default function TocPage() {
     <div className="min-h-screen bg-gray-50">
       <Header />
       <main className="mx-auto max-w-2xl px-4 py-12">
-        {/* 헤더 */}
         <div className="mb-8 text-center">
           <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-purple-50 px-3 py-1 text-xs font-semibold text-purple-700">
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-purple-600 text-white text-xs font-bold">3</span>
@@ -246,7 +293,6 @@ export default function TocPage() {
                 {title}
               </button>
             ))}
-            {/* 직접 입력 */}
             <button
               onClick={() => setUseCustomTitle(true)}
               className={`col-span-2 rounded-xl border-2 px-3 py-2.5 text-left transition-all ${
@@ -350,7 +396,6 @@ export default function TocPage() {
               <span className="ml-1 text-xs font-normal text-gray-400">(클릭해서 편집)</span>
             </h2>
             <div className="card">
-              {/* 제목 편집 */}
               <div className="mb-5 text-center">
                 <InlineEdit
                   value={editTitle}
@@ -359,8 +404,6 @@ export default function TocPage() {
                   display={(v) => `『${v}』`}
                 />
               </div>
-
-              {/* 챕터 편집 */}
               <div className="space-y-4">
                 {editChapters.map((ch, ci) => (
                   <div key={ci} className="rounded-xl border border-gray-100 bg-gray-50 p-4">
@@ -398,7 +441,6 @@ export default function TocPage() {
           </section>
         )}
 
-        {/* 확정 버튼 */}
         <button
           onClick={handleConfirm}
           disabled={!canProceed || isSaving}
@@ -432,7 +474,6 @@ export default function TocPage() {
   );
 }
 
-// 인라인 편집 컴포넌트
 function InlineEdit({
   value,
   onChange,
@@ -467,7 +508,6 @@ function InlineEdit({
   );
 }
 
-// 소제목 행
 function SubtitleRow({
   value,
   onChange,

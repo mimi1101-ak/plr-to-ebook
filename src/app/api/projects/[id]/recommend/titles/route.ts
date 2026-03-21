@@ -5,12 +5,20 @@ import { safeParseDb, JSON_ONLY } from "@/lib/safe-parse";
 
 export const maxDuration = 60;
 
+/**
+ * POST /api/projects/[id]/recommend/titles
+ * Body: { jobId: string, targetAudience: string }
+ * 제목 10개 생성 후 Job.status = "titles_done"
+ */
 export async function POST(
   request: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  let jobId: string | undefined;
   try {
-    const { targetAudience }: { targetAudience: string } = await request.json();
+    const { targetAudience, jobId: jid }: { targetAudience: string; jobId?: string } =
+      await request.json();
+    jobId = jid;
 
     const project = await prisma.project.findUnique({ where: { id: params.id } });
     if (!project) {
@@ -19,17 +27,22 @@ export async function POST(
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
+      await markFailed(jobId, "ANTHROPIC_API_KEY 없음");
       return NextResponse.json({ message: "ANTHROPIC_API_KEY 없음" }, { status: 500 });
     }
 
+    if (jobId) {
+      await prisma.job.update({ where: { id: jobId }, data: { status: "running" } }).catch(() => {});
+    }
+
+    // targetAudience를 project에 저장
     await prisma.project.update({
       where: { id: params.id },
       data: { targetAudience } as any,
     });
 
     const analysisData = safeParseDb<Record<string, unknown>>(
-      (project as any).analysisData as string | null,
-      {}
+      (project as any).analysisData as string | null, {}
     );
     const summary = ((analysisData.summary as string) ?? ((project as any).originalText as string | null ?? "")).slice(0, 300);
 
@@ -37,17 +50,15 @@ export async function POST(
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
       max_tokens: 350,
-      messages: [
-        {
-          role: "user",
-          content: `"${targetAudience}" 독자를 위한 전자책 제목 10개를 아래 형식의 JSON 배열로만 출력하라. 각 제목 20자 이내.
+      messages: [{
+        role: "user",
+        content: `"${targetAudience}" 독자를 위한 전자책 제목 10개를 아래 형식의 JSON 배열로만 출력하라. 각 제목 20자 이내.
 
 원고 요약: ${summary}
 
 출력 형식:
 ["제목1","제목2","제목3","제목4","제목5","제목6","제목7","제목8","제목9","제목10"]${JSON_ONLY}`,
-        },
-      ],
+      }],
     });
 
     const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
@@ -57,23 +68,30 @@ export async function POST(
       throw new Error(`제목 파싱 실패. 원문: ${raw.slice(0, 150)}`);
     }
 
+    if (jobId) {
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { status: "titles_done", result: JSON.stringify({ titles }) },
+      });
+    }
+
     console.log(`[RECOMMEND/TITLES] 완료 — ${titles.length}개`);
-    return NextResponse.json({ titles });
+    return NextResponse.json({ done: true });
   } catch (error) {
     console.error("[RECOMMEND/TITLES] 오류:", error);
+    await markFailed(jobId, String(error));
     return NextResponse.json({ message: "제목 생성 실패", detail: String(error) }, { status: 500 });
   }
 }
 
-/**
- * 다양한 형식의 Claude 응답에서 제목 목록 추출
- * 1순위: JSON 배열 / 2순위: 마크다운 코드블록 / 3순위: 번호 목록
- * 4순위: 따옴표 줄 / 5순위: 불릿 목록 / 6순위: 평문 줄
- */
+async function markFailed(jobId: string | undefined, error: string) {
+  if (!jobId) return;
+  await prisma.job.update({ where: { id: jobId }, data: { status: "failed", error } }).catch(() => {});
+}
+
 function parseTitles(raw: string): string[] {
   const stripped = raw.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
 
-  // 1. JSON 배열
   const arrMatch = stripped.match(/\[[\s\S]*?\]/);
   if (arrMatch) {
     try {
@@ -91,28 +109,24 @@ function parseTitles(raw: string): string[] {
 
   const lines = stripped.split("\n").map((l) => l.trim()).filter(Boolean);
 
-  // 2. 번호 목록
   const numbered = lines
     .map((l) => l.match(/^\d+[.)]\s*(.+)/))
     .filter(Boolean)
     .map((m) => m![1].replace(/^["']|["']$/g, "").trim());
   if (numbered.length >= 3) return numbered;
 
-  // 3. 따옴표 줄
   const quoted = lines
     .map((l) => l.match(/^["'](.+)["']$/))
     .filter(Boolean)
     .map((m) => m![1].trim());
   if (quoted.length >= 3) return quoted;
 
-  // 4. 불릿 목록
   const bullets = lines
     .map((l) => l.match(/^[-•*]\s*(.+)/))
     .filter(Boolean)
     .map((m) => m![1].replace(/^["']|["']$/g, "").trim());
   if (bullets.length >= 3) return bullets;
 
-  // 5. 평문 줄
   const plain = lines
     .map((l) => l.replace(/^[\d.)\-•*\s]+/, "").replace(/^["']|["']$/g, "").trim())
     .filter((l) => l.length > 2 && l.length < 60);

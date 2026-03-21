@@ -18,7 +18,7 @@ interface AnalysisResult {
   targetAudiences: TargetAudience[];
 }
 
-const POLL_INTERVAL = 2000; // 2초마다 폴링
+const POLL_INTERVAL = 5000; // 5초마다 폴링
 
 export default function AnalysisPage() {
   const router = useRouter();
@@ -35,7 +35,6 @@ export default function AnalysisPage() {
   const calledRef = useRef(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // 컴포넌트 언마운트 시 폴링 정리
   useEffect(() => {
     return () => {
       if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
@@ -46,19 +45,21 @@ export default function AnalysisPage() {
     if (!currentProjectId) { router.push("/upload"); return; }
     if (calledRef.current) return;
     calledRef.current = true;
-
     startAnalysis(currentProjectId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProjectId]);
 
   async function startAnalysis(projectId: string) {
-    // 1단계: 작업 초기화 (즉시 반환)
+    // 1. Job 생성 → jobId 즉시 반환
+    let jobId: string;
     try {
       const res = await fetch(`/api/projects/${projectId}/analyze`, { method: "POST" });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.message ?? "초기화 실패");
       }
+      const data = await res.json();
+      jobId = data.jobId;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "초기화 실패");
       router.push("/upload");
@@ -67,42 +68,50 @@ export default function AnalysisPage() {
 
     setLoadingMsg("요약 생성 중...");
 
-    // 2단계: 요약 생성 (fire-and-forget)
-    fetch(`/api/projects/${projectId}/analyze/run`, { method: "POST" }).catch(() => {});
+    // 2. 요약 생성 (fire-and-forget)
+    fetch(`/api/projects/${projectId}/analyze/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId }),
+    }).catch(() => {});
 
-    // 3단계: 폴링 시작
-    pollStatus(projectId, false);
+    // 3. /api/jobs/[jobId]/status 폴링 시작
+    pollJobStatus(projectId, jobId, false);
   }
 
-  // targetsTriggered: 타겟층 API를 이미 호출했는지 여부 (중복 호출 방지)
-  function pollStatus(projectId: string, targetsTriggered: boolean) {
+  function pollJobStatus(projectId: string, jobId: string, targetsTriggered: boolean) {
     const check = async (alreadyTriggered: boolean) => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/analyze/status`);
+        const res = await fetch(`/api/jobs/${jobId}/status`);
         if (!res.ok) throw new Error("폴링 실패");
         const data = await res.json();
 
         if (data.status === "done") {
-          setResult({ summary: data.summary, targetAudiences: data.targetAudiences });
+          const r = data.result as { summary: string; targetAudiences: TargetAudience[] };
+          setResult({ summary: r.summary, targetAudiences: r.targetAudiences });
           setIsLoading(false);
-          return; // 폴링 종료
+          return;
         }
 
         if (data.status === "failed") {
           toast.error(data.error ?? "내용 분석에 실패했습니다.");
           router.push("/upload");
-          return; // 폴링 종료
+          return;
         }
 
         // 요약 완료 → 타겟층 생성 트리거 (한 번만)
         if (data.status === "summary_done" && !alreadyTriggered) {
           setLoadingMsg("타겟층 분석 중...");
-          fetch(`/api/projects/${projectId}/analyze/targets`, { method: "POST" }).catch(() => {});
+          fetch(`/api/projects/${projectId}/analyze/targets`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ jobId }),
+          }).catch(() => {});
           pollTimerRef.current = setTimeout(() => check(true), POLL_INTERVAL);
           return;
         }
 
-        // "processing" 또는 "summary_done" 상태 → 계속 폴링
+        // 계속 폴링
         pollTimerRef.current = setTimeout(() => check(alreadyTriggered), POLL_INTERVAL);
       } catch {
         pollTimerRef.current = setTimeout(() => check(alreadyTriggered), POLL_INTERVAL);
@@ -149,8 +158,8 @@ export default function AnalysisPage() {
             </div>
             <div className="flex gap-2 mt-2 flex-wrap justify-center">
               {[
-                { label: "원고 내용 파악", done: loadingMsg.includes("타겟층") || loadingMsg.includes("완료") },
-                { label: "핵심 주제 요약", done: loadingMsg.includes("타겟층") || loadingMsg.includes("완료") },
+                { label: "원고 내용 파악", done: loadingMsg.includes("타겟층") },
+                { label: "핵심 주제 요약", done: loadingMsg.includes("타겟층") },
                 { label: "타겟층 분석", done: false },
               ].map(({ label, done }, i) => (
                 <span
@@ -183,7 +192,6 @@ export default function AnalysisPage() {
       <Header />
 
       <main className="mx-auto max-w-2xl px-4 py-12">
-        {/* 헤더 */}
         <div className="mb-8 text-center">
           <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700">
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white text-xs font-bold">2</span>
@@ -193,7 +201,6 @@ export default function AnalysisPage() {
           <p className="mt-2 text-sm text-gray-500">타겟 독자층을 선택하면 맞춤형 전자책을 생성합니다.</p>
         </div>
 
-        {/* 요약 카드 */}
         <div className="card mb-6">
           <h2 className="mb-2 text-sm font-bold text-gray-800">📄 원고 내용 요약</h2>
           <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-line">
@@ -209,7 +216,6 @@ export default function AnalysisPage() {
           )}
         </div>
 
-        {/* 타겟층 선택 */}
         <div className="mb-6">
           <h2 className="mb-3 text-sm font-bold text-gray-800">🎯 추천 타겟층 선택</h2>
           <div className="space-y-3">
@@ -253,7 +259,6 @@ export default function AnalysisPage() {
               </button>
             ))}
 
-            {/* 직접 입력 */}
             <button
               onClick={() => setUseCustom(true)}
               className={`w-full rounded-xl border-2 p-4 text-left transition-all ${
@@ -288,7 +293,6 @@ export default function AnalysisPage() {
           </div>
         </div>
 
-        {/* 다음 버튼 */}
         <button
           onClick={handleNext}
           disabled={!canProceed}
