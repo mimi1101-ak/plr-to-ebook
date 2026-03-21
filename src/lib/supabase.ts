@@ -3,35 +3,20 @@ import { createClient } from "@supabase/supabase-js";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
 
-// sb_secret_ 형식(신규) 또는 SUPABASE_SERVICE_ROLE_KEY(구형 JWT) 모두 지원
-const supabaseServiceKey =
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-
-function detectKeyFormat(key: string) {
-  if (!key) return "MISSING";
-  if (key.startsWith("sb_secret_")) return "sb_secret_ (new format)";
-  if (key.startsWith("eyJ")) return "JWT (classic format)";
-  return `unknown (prefix: ${key.slice(0, 8)}...)`;
-}
+// ⚠️  반드시 JWT 형식 키(eyJ...)를 사용하세요.
+// Supabase 대시보드 → Settings → API → "Legacy anon, service_role API keys" 탭
+// → service_role 행의 "Reveal" 클릭 → 복사
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 
 // 클라이언트용 (브라우저)
 export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
-// 서버용 — auth 세션 관리 완전 비활성화
-// sb_secret_ 형식 키는 JWT가 아니므로 auth 모듈의 토큰 파싱을 건너뜀
+// 서버용 — 세션 관리 비활성화 (서버사이드에서는 불필요)
 export const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
     autoRefreshToken: false,
     persistSession: false,
     detectSessionInUrl: false,
-  },
-  global: {
-    headers: {
-      // apikey + Authorization 헤더를 명시적으로 설정
-      // → SDK 내부 자동 주입에 의존하지 않고 직접 지정
-      apikey: supabaseServiceKey,
-      Authorization: `Bearer ${supabaseServiceKey}`,
-    },
   },
 });
 
@@ -42,26 +27,28 @@ export async function uploadFile(
   fileName: string,
   contentType: string
 ): Promise<string> {
-  // ── 진단 로그 ──────────────────────────────────────────
-  console.log("[SUPABASE:upload] ── 시작 ──────────────────────");
-  console.log(`[SUPABASE:upload] url         : ${supabaseUrl || "MISSING"}`);
-  console.log(`[SUPABASE:upload] key format  : ${detectKeyFormat(supabaseServiceKey)}`);
-  console.log(`[SUPABASE:upload] key prefix  : ${supabaseServiceKey ? supabaseServiceKey.slice(0, 20) + "…" : "MISSING"}`);
-  console.log(`[SUPABASE:upload] bucket      : ${BUCKET_NAME}`);
-  console.log(`[SUPABASE:upload] path        : ${fileName}`);
-  console.log(`[SUPABASE:upload] size        : ${file.length} bytes`);
-  console.log(`[SUPABASE:upload] contentType : ${contentType}`);
-  // ─────────────────────────────────────────────────────
+  console.log("[SUPABASE:upload] 시작");
+  console.log(`[SUPABASE:upload] url        : ${supabaseUrl || "❌ MISSING"}`);
+  console.log(`[SUPABASE:upload] key set    : ${supabaseServiceKey ? "✅ yes" : "❌ MISSING"}`);
+  console.log(`[SUPABASE:upload] key format : ${
+    !supabaseServiceKey       ? "MISSING" :
+    supabaseServiceKey.startsWith("eyJ") ? "✅ JWT (올바른 형식)" :
+    supabaseServiceKey.startsWith("sb_secret_") ? "❌ sb_secret_ (잘못된 형식 — Legacy JWT 키를 사용하세요)" :
+    `❓ unknown (prefix: ${supabaseServiceKey.slice(0, 10)}…)`
+  }`);
+  console.log(`[SUPABASE:upload] bucket     : ${BUCKET_NAME}`);
+  console.log(`[SUPABASE:upload] path       : ${fileName}`);
+  console.log(`[SUPABASE:upload] size       : ${file.length} bytes`);
 
   // 버킷 존재 여부 사전 확인
   const { data: buckets, error: listErr } = await supabaseAdmin.storage.listBuckets();
   if (listErr) {
-    console.error(`[SUPABASE:upload] listBuckets 오류: ${listErr.message} | ${JSON.stringify(listErr)}`);
+    console.error(`[SUPABASE:upload] listBuckets 실패: ${listErr.message} | ${JSON.stringify(listErr)}`);
   } else {
     const names = buckets.map((b) => b.name);
-    console.log(`[SUPABASE:upload] 버킷 목록(${buckets.length}개): [${names.join(", ")}]`);
+    console.log(`[SUPABASE:upload] 버킷 목록(${buckets.length}개): [${names.join(", ") || "없음"}]`);
     if (!names.includes(BUCKET_NAME)) {
-      console.error(`[SUPABASE:upload] ❌ '${BUCKET_NAME}' 버킷이 없습니다! Supabase Storage에서 버킷을 생성하세요.`);
+      console.error(`[SUPABASE:upload] ❌ '${BUCKET_NAME}' 버킷 없음 — Supabase Storage에서 생성하세요`);
     }
   }
 
@@ -74,17 +61,11 @@ export async function uploadFile(
     console.error(`[SUPABASE:upload]   message    : ${error.message}`);
     console.error(`[SUPABASE:upload]   name       : ${error.name}`);
     console.error(`[SUPABASE:upload]   statusCode : ${(error as any).statusCode ?? "N/A"}`);
-    console.error(`[SUPABASE:upload]   status     : ${(error as any).status ?? "N/A"}`);
     console.error(`[SUPABASE:upload]   raw        : ${JSON.stringify(error)}`);
-    throw new Error(
-      `Supabase 업로드 실패 [${(error as any).statusCode ?? "?"}] ${error.message}`
-    );
+    throw new Error(`Supabase 업로드 실패 [${(error as any).statusCode ?? "?"}] ${error.message}`);
   }
 
-  const { data: urlData } = supabaseAdmin.storage
-    .from(BUCKET_NAME)
-    .getPublicUrl(data.path);
-
+  const { data: urlData } = supabaseAdmin.storage.from(BUCKET_NAME).getPublicUrl(data.path);
   console.log(`[SUPABASE:upload] ✅ 성공: ${urlData.publicUrl}`);
   return urlData.publicUrl;
 }
@@ -92,15 +73,11 @@ export async function uploadFile(
 export async function downloadFile(filePath: string): Promise<Buffer> {
   console.log(`[SUPABASE:download] path: ${filePath}`);
 
-  const { data, error } = await supabaseAdmin.storage
-    .from(BUCKET_NAME)
-    .download(filePath);
+  const { data, error } = await supabaseAdmin.storage.from(BUCKET_NAME).download(filePath);
 
   if (error) {
     console.error(`[SUPABASE:download] ❌ 실패: ${error.message} | statusCode: ${(error as any).statusCode ?? "N/A"} | ${JSON.stringify(error)}`);
-    throw new Error(
-      `Supabase 다운로드 실패 [${(error as any).statusCode ?? "?"}] ${error.message}`
-    );
+    throw new Error(`Supabase 다운로드 실패 [${(error as any).statusCode ?? "?"}] ${error.message}`);
   }
 
   const arrayBuffer = await data.arrayBuffer();
