@@ -32,10 +32,14 @@ model Project {
   status      String  @default("PENDING")
   progress    Int     @default(0) // 0~100
 
-  // 확정 목차 (JSON 문자열)
+  // 2단계: 내용 분석 결과 (JSON)
+  analysisData  String?  // { summary, targetAudiences[] }
+  targetAudience String? // 확정 타겟층
+
+  // 3단계: 확정 목차 (JSON 문자열)
   tocData       String?
 
-  // 챕터별 생성 결과 (클라이언트 오케스트레이션용 JSON)
+  // 4단계: 챕터별 생성 결과 (클라이언트 오케스트레이션용 JSON)
   chaptersJson  String?
 
   // 결과물

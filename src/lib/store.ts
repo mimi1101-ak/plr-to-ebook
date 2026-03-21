@@ -1,32 +1,29 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type {
-  Project,
   TemplateSettings,
   WritingStyle,
   TocFormat,
   SentenceStructure,
-  GeneratedToc,
 } from "@/types";
 
 interface AppState {
-  // 현재 작업 중인 프로젝트
   currentProjectId: string | null;
   uploadedFile: {
     name: string;
     size: number;
     type: "docx" | "pdf";
   } | null;
+  targetAudience: string | null;
+  // templateSettings는 에디터의 AI 재생성 기능에서 사용
   templateSettings: TemplateSettings;
-  generatedToc: GeneratedToc | null;
 
-  // 액션
   setCurrentProjectId: (id: string | null) => void;
   setUploadedFile: (file: AppState["uploadedFile"]) => void;
+  setTargetAudience: (t: string | null) => void;
   setWritingStyle: (style: WritingStyle) => void;
   setTocFormat: (format: TocFormat) => void;
   setSentenceStructure: (structure: SentenceStructure) => void;
-  setGeneratedToc: (toc: GeneratedToc | null) => void;
   resetProject: () => void;
 }
 
@@ -41,11 +38,12 @@ export const useAppStore = create<AppState>()(
     (set) => ({
       currentProjectId: null,
       uploadedFile: null,
+      targetAudience: null,
       templateSettings: defaultTemplateSettings,
-      generatedToc: null,
 
       setCurrentProjectId: (id) => set({ currentProjectId: id }),
       setUploadedFile: (file) => set({ uploadedFile: file }),
+      setTargetAudience: (t) => set({ targetAudience: t }),
       setWritingStyle: (style) =>
         set((state) => ({
           templateSettings: { ...state.templateSettings, writingStyle: style },
@@ -56,18 +54,14 @@ export const useAppStore = create<AppState>()(
         })),
       setSentenceStructure: (structure) =>
         set((state) => ({
-          templateSettings: {
-            ...state.templateSettings,
-            sentenceStructure: structure,
-          },
+          templateSettings: { ...state.templateSettings, sentenceStructure: structure },
         })),
-      setGeneratedToc: (toc) => set({ generatedToc: toc }),
       resetProject: () =>
         set({
           currentProjectId: null,
           uploadedFile: null,
+          targetAudience: null,
           templateSettings: defaultTemplateSettings,
-          generatedToc: null,
         }),
     }),
     {
@@ -75,8 +69,8 @@ export const useAppStore = create<AppState>()(
       partialize: (state) => ({
         currentProjectId: state.currentProjectId,
         uploadedFile: state.uploadedFile,
+        targetAudience: state.targetAudience,
         templateSettings: state.templateSettings,
-        generatedToc: state.generatedToc,
       }),
     }
   )

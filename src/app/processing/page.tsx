@@ -119,7 +119,7 @@ export default function ProcessingPage() {
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold">
               4
             </span>
-            AI 변환 중
+            전자책 생성 중
           </div>
           <h1 className="text-2xl font-bold text-gray-900">
             {isDone ? "전자책 생성 완료!" :
@@ -234,8 +234,8 @@ export default function ProcessingPage() {
             <button onClick={() => router.push("/upload")} className="btn-secondary flex-1">
               파일 다시 업로드
             </button>
-            <button onClick={() => router.push("/toc")} className="btn-primary flex-1">
-              다시 시도
+            <button onClick={() => router.push("/analysis")} className="btn-primary flex-1">
+              처음부터 다시
             </button>
           </div>
         )}

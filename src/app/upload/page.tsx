@@ -72,7 +72,7 @@ export default function UploadPage() {
       toast.success("파일 업로드 완료!");
 
       setTimeout(() => {
-        router.push("/template");
+        router.push("/analysis");
       }, 600);
     } catch (error) {
       setIsUploading(false);

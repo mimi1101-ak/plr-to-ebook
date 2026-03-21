@@ -6,9 +6,10 @@ import { cn } from "@/lib/utils";
 
 const steps = [
   { href: "/upload", label: "업로드", step: 1 },
-  { href: "/template", label: "템플릿", step: 2 },
-  { href: "/processing", label: "변환", step: 3 },
-  { href: "/result", label: "다운로드", step: 4 },
+  { href: "/analysis", label: "내용 분석", step: 2 },
+  { href: "/toc", label: "제목/목차", step: 3 },
+  { href: "/processing", label: "전자책 생성", step: 4 },
+  { href: "/editor", label: "편집/다운로드", step: 5 },
 ];
 
 export default function Header() {

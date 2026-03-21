@@ -23,7 +23,7 @@ const FORMAT_OPTIONS: { format: DownloadFormat; label: string; icon: string }[] 
 
 export default function EditorPage() {
   const router = useRouter();
-  const { currentProjectId, templateSettings } = useAppStore();
+  const { currentProjectId } = useAppStore();
 
   const [isLoading, setIsLoading] = useState(true);
   const [ebookTitle, setEbookTitle] = useState("");
@@ -162,8 +162,6 @@ export default function EditorPage() {
             chapterNumber: activeChapter.number,
             totalChapters: chapters.length,
             ebookTitle,
-            writingStyle: templateSettings.writingStyle,
-            sentenceStructure: templateSettings.sentenceStructure,
           }),
         }
       );
