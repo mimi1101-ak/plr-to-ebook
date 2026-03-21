@@ -35,6 +35,9 @@ model Project {
   // 확정 목차 (JSON 문자열)
   tocData       String?
 
+  // 챕터별 생성 결과 (클라이언트 오케스트레이션용 JSON)
+  chaptersJson  String?
+
   // 결과물
   ebookTitle    String?
   ebookContent  String?
