@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import Anthropic from "@anthropic-ai/sdk";
+import { safeParseArray, safeParseDb, JSON_ONLY } from "@/lib/safe-parse";
 
 export const maxDuration = 60;
 
-/**
- * POST /api/projects/[id]/analyze/targets
- * 2단계: 타겟층 3개 생성 (max_tokens: 380 → ~4s, 타임아웃 안전)
- * /analyze/run 완료(status: summary_done) 후 호출.
- * 완료 후 status = "done"으로 저장.
- */
 export async function POST(
   _request: NextRequest,
   { params }: { params: { id: string } }
@@ -20,12 +15,15 @@ export async function POST(
       return NextResponse.json({ message: "프로젝트 없음" }, { status: 404 });
     }
 
-    const existing = JSON.parse(((project as any).analysisData as string | null) ?? "{}");
+    const existing = safeParseDb<Record<string, unknown>>(
+      (project as any).analysisData as string | null,
+      {}
+    );
     if (existing.status === "done") {
       return NextResponse.json({ done: true });
     }
 
-    const summary: string = existing.summary ?? "";
+    const summary = (existing.summary as string) ?? "";
     if (!summary) {
       await markFailed(params.id, "요약 없음 — /analyze/run 먼저 호출하세요");
       return NextResponse.json({ message: "요약 없음" }, { status: 400 });
@@ -49,26 +47,17 @@ export async function POST(
 내용: "${summary}"
 
 출력 형식:
-[{"name":"타겟층명","characteristics":"특징(40자)","needs":"핵심니즈(35자)","purchaseMotivation":"구매동기(35자)"},{"name":"...","characteristics":"...","needs":"...","purchaseMotivation":"..."},{"name":"...","characteristics":"...","needs":"...","purchaseMotivation":"..."}]`,
+[{"name":"타겟층명","characteristics":"특징(40자)","needs":"핵심니즈(35자)","purchaseMotivation":"구매동기(35자)"},{"name":"...","characteristics":"...","needs":"...","purchaseMotivation":"..."},{"name":"...","characteristics":"...","needs":"...","purchaseMotivation":"..."}]${JSON_ONLY}`,
         },
       ],
     });
 
     const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+    const targetAudiences = safeParseArray(raw, "ANALYZE/TARGETS");
 
-    // JSON 배열 파싱 (잘린 경우 완성된 객체만 추출)
-    let targetAudiences: unknown[] = [];
-    const arrMatch = raw.match(/\[[\s\S]*\]/);
-    if (arrMatch) {
-      try {
-        targetAudiences = JSON.parse(arrMatch[0]);
-      } catch {
-        // 잘린 JSON — 완성된 객체만 추출
-        const objMatches = raw.match(/\{[^{}]+\}/g) ?? [];
-        targetAudiences = objMatches.flatMap((s) => { try { return [JSON.parse(s)]; } catch { return []; } });
-      }
+    if (targetAudiences.length === 0) {
+      throw new Error("타겟층 파싱 실패: " + raw.slice(0, 100));
     }
-    if (targetAudiences.length === 0) throw new Error("타겟층 파싱 실패: " + raw.slice(0, 100));
 
     await prisma.project.update({
       where: { id: params.id },

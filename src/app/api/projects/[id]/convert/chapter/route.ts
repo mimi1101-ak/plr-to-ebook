@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import Anthropic from "@anthropic-ai/sdk";
+import { safeParseDb } from "@/lib/safe-parse";
 
 // Pro 이상에서 최대 60초 허용 (Hobby는 10초 고정)
 export const maxDuration = 60;
@@ -92,7 +93,7 @@ ${originalText.slice(0, 2000)}
     console.log(`[CHAPTER] ${sectionLabel} "${title}" 완료 — ${content.length}자`);
 
     // 기존 chaptersJson에 추가
-    const existing = JSON.parse(((project as any).chaptersJson as string | null) ?? "[]") as any[];
+    const existing = safeParseDb<any[]>((project as any).chaptersJson as string | null, []);
     existing[chapterIndex] = { index: chapterIndex, type, number, title, content };
 
     const progress = Math.round(((chapterIndex + 1) / totalChapters) * 90);

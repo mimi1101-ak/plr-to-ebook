@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import Anthropic from "@anthropic-ai/sdk";
+import { safeParseDb } from "@/lib/safe-parse";
 
 export const maxDuration = 60;
 
@@ -20,7 +21,7 @@ export async function POST(
       return NextResponse.json({ message: "프로젝트 없음" }, { status: 404 });
     }
 
-    const existing = JSON.parse(((project as any).analysisData as string | null) ?? "{}");
+    const existing = safeParseDb<Record<string, unknown>>((project as any).analysisData as string | null, {});
     if (existing.status === "summary_done" || existing.status === "done") {
       return NextResponse.json({ done: true });
     }
