@@ -9,16 +9,44 @@ import type { ChapterTask } from "@/app/api/projects/[id]/convert/start/route";
 
 type Phase = "idle" | "starting" | "generating" | "finishing" | "done" | "failed";
 
+const TIMEOUT_MSG = "처리 시간이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요.";
+
+async function safePost(url: string, body?: object): Promise<{ ok: true; data: any } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const text = await res.text();
+    let data: any;
+    try { data = JSON.parse(text); } catch {
+      return { ok: false, error: TIMEOUT_MSG };
+    }
+    if (!res.ok) {
+      const isTimeout = res.status === 504 || res.status === 408;
+      return { ok: false, error: isTimeout || !data?.message ? TIMEOUT_MSG : data.message };
+    }
+    return { ok: true, data };
+  } catch {
+    return { ok: false, error: TIMEOUT_MSG };
+  }
+}
+
 export default function ProcessingPage() {
   const router = useRouter();
-  const { currentProjectId, uploadedFile, templateSettings } = useAppStore();
+  const { currentProjectId, uploadedFile } = useAppStore();
 
   const [phase, setPhase] = useState<Phase>("idle");
   const [chapters, setChapters] = useState<ChapterTask[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [doneIndexes, setDoneIndexes] = useState<Set<number>>(new Set());
+  const [chapterChars, setChapterChars] = useState<Map<number, number>>(new Map());
+  const [failedIndex, setFailedIndex] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState("");
   const startedRef = useRef(false);
+  const chaptersRef = useRef<ChapterTask[]>([]);
+  const projectIdRef = useRef<string>("");
 
   const totalChapters = chapters.length;
   const doneCount = doneIndexes.size;
@@ -30,6 +58,7 @@ export default function ProcessingPage() {
   useEffect(() => {
     if (!currentProjectId || startedRef.current) return;
     startedRef.current = true;
+    projectIdRef.current = currentProjectId;
     run(currentProjectId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProjectId]);
@@ -37,66 +66,86 @@ export default function ProcessingPage() {
   async function run(projectId: string) {
     // 1. start
     setPhase("starting");
-    let chapterList: ChapterTask[] = [];
-    try {
-      const res = await fetch(`/api/projects/${projectId}/convert/start`, { method: "POST" });
-      if (!res.ok) throw new Error((await res.json()).message ?? "초기화 실패");
-      const data = await res.json();
-      chapterList = data.chapters;
-      setChapters(chapterList);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "초기화 실패";
-      setErrorMsg(msg);
+    const startResult = await safePost(`/api/projects/${projectId}/convert/start`);
+    if (!startResult.ok) {
+      setErrorMsg(startResult.error);
       setPhase("failed");
-      toast.error(msg);
+      toast.error(startResult.error);
       return;
     }
+    const chapterList: ChapterTask[] = startResult.data.chapters;
+    chaptersRef.current = chapterList;
+    setChapters(chapterList);
 
-    // 2. 챕터별 순차 생성
-    setPhase("generating");
-    for (let i = 0; i < chapterList.length; i++) {
-      const ch = chapterList[i];
-      setCurrentIndex(i);
-      try {
-        const res = await fetch(`/api/projects/${projectId}/convert/chapter`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            chapterIndex: ch.index,
-            type: ch.type,
-            number: ch.number,
-            title: ch.title,
-            subtitles: ch.subtitles,
-            totalChapters: chapterList.length,
-          }),
-        });
-        if (!res.ok) throw new Error((await res.json()).message ?? "챕터 생성 실패");
-        setDoneIndexes((prev) => { const next = new Set(prev); next.add(i); return next; });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "챕터 생성 실패";
-        setErrorMsg(`${getSectionLabel(ch)} 생성 실패: ${msg}`);
-        setPhase("failed");
-        toast.error(msg);
-        // FAILED 상태로 DB 업데이트
-        await fetch(`/api/projects/${projectId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ status: "FAILED", errorMessage: msg }),
-        }).catch(() => {});
-        return;
-      }
-    }
+    // 2. 챕터 순차 생성
+    const success = await generateChapters(projectId, chapterList, 0);
+    if (!success) return;
 
     // 3. finish
     setPhase("finishing");
-    try {
-      const res = await fetch(`/api/projects/${projectId}/convert/finish`, { method: "POST" });
-      if (!res.ok) throw new Error((await res.json()).message ?? "조립 실패");
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "최종 조립 실패";
-      setErrorMsg(msg);
+    const finishResult = await safePost(`/api/projects/${projectId}/convert/finish`);
+    if (!finishResult.ok) {
+      setErrorMsg(finishResult.error);
       setPhase("failed");
-      toast.error(msg);
+      toast.error(finishResult.error);
+      return;
+    }
+
+    setPhase("done");
+    toast.success("전자책 생성 완료!");
+    setTimeout(() => router.push("/editor"), 800);
+  }
+
+  async function generateChapters(projectId: string, chapterList: ChapterTask[], startIndex: number): Promise<boolean> {
+    setPhase("generating");
+    for (let i = startIndex; i < chapterList.length; i++) {
+      const ch = chapterList[i];
+      setCurrentIndex(i);
+
+      const result = await safePost(`/api/projects/${projectId}/convert/chapter`, {
+        chapterIndex: ch.index,
+        type: ch.type,
+        number: ch.number,
+        title: ch.title,
+        subtitles: ch.subtitles,
+        totalChapters: chapterList.length,
+      });
+
+      if (!result.ok) {
+        const msg = `${getSectionLabel(ch)} 생성 실패: ${result.error}`;
+        setErrorMsg(msg);
+        setFailedIndex(i);
+        setPhase("failed");
+        toast.error(result.error);
+        await safePost(`/api/projects/${projectId}`, { status: "FAILED", errorMessage: result.error });
+        return false;
+      }
+
+      const charCount = typeof result.data.content === "string" ? result.data.content.length : 0;
+      setChapterChars((prev) => new Map(prev).set(i, charCount));
+      setDoneIndexes((prev) => { const next = new Set(prev); next.add(i); return next; });
+    }
+    return true;
+  }
+
+  async function handleRetry() {
+    if (failedIndex === null) return;
+    const projectId = projectIdRef.current;
+    const chapterList = chaptersRef.current;
+
+    setErrorMsg("");
+    setFailedIndex(null);
+
+    const success = await generateChapters(projectId, chapterList, failedIndex);
+    if (!success) return;
+
+    // finish
+    setPhase("finishing");
+    const finishResult = await safePost(`/api/projects/${projectId}/convert/finish`);
+    if (!finishResult.ok) {
+      setErrorMsg(finishResult.error);
+      setPhase("failed");
+      toast.error(finishResult.error);
       return;
     }
 
@@ -116,9 +165,7 @@ export default function ProcessingPage() {
         {/* 타이틀 */}
         <div className="mb-10 text-center">
           <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
-            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold">
-              4
-            </span>
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-amber-500 text-white text-xs font-bold">4</span>
             전자책 생성 중
           </div>
           <h1 className="text-2xl font-bold text-gray-900">
@@ -128,7 +175,7 @@ export default function ProcessingPage() {
           </h1>
           <p className="mt-2 text-sm text-gray-500">
             {isDone ? "에디터로 이동합니다..." :
-             isFailed ? "다시 시도하거나 파일을 확인해 주세요." :
+             isFailed ? "해당 챕터만 다시 시도할 수 있습니다." :
              "챕터를 순서대로 생성하고 있습니다. 잠시만 기다려 주세요."}
           </p>
         </div>
@@ -201,19 +248,28 @@ export default function ProcessingPage() {
             {chapters.map((ch, idx) => {
               const done = doneIndexes.has(idx);
               const active = idx === currentIndex && !done && !isFailed;
+              const isFail = isFailed && idx === failedIndex;
+              const chars = chapterChars.get(idx);
+
               return (
                 <div
                   key={ch.index}
                   className={`flex items-center gap-3 rounded-lg px-3 py-2 text-xs transition-all ${
+                    isFail ? "bg-red-50 text-red-700" :
                     active ? "bg-brand-50 text-brand-700 font-medium" :
-                    done ? "text-gray-400" : "text-gray-300"
+                    done ? "text-gray-500" : "text-gray-300"
                   }`}
                 >
                   <span className={`flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full ${
+                    isFail ? "bg-red-100 text-red-500" :
                     done ? "bg-green-100 text-green-600" :
                     active ? "bg-brand-600 text-white" : "bg-gray-100 text-gray-300"
                   }`}>
-                    {done ? (
+                    {isFail ? (
+                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none">
+                        <path d="M18 6L6 18M6 6l12 12" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                      </svg>
+                    ) : done ? (
                       <svg width="8" height="8" viewBox="0 0 24 24" fill="none">
                         <path d="M20 6L9 17l-5-5" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
                       </svg>
@@ -221,21 +277,32 @@ export default function ProcessingPage() {
                       <span className="text-[9px] font-bold">{idx + 1}</span>
                     )}
                   </span>
-                  <span className="truncate">{getSectionLabel(ch)} {ch.title}</span>
+                  <span className="flex-1 truncate">{getSectionLabel(ch)} {ch.title}</span>
+                  {done && chars && (
+                    <span className="flex-shrink-0 text-[10px] text-gray-400">{chars.toLocaleString()}자</span>
+                  )}
+                  {isFail && (
+                    <button
+                      onClick={handleRetry}
+                      className="flex-shrink-0 rounded-md bg-red-100 px-2 py-0.5 text-[10px] font-semibold text-red-600 hover:bg-red-200"
+                    >
+                      재시도
+                    </button>
+                  )}
                 </div>
               );
             })}
           </div>
         )}
 
-        {/* 실패 시 재시도 */}
+        {/* 실패 시 하단 버튼 */}
         {isFailed && (
           <div className="mt-6 flex gap-3">
             <button onClick={() => router.push("/upload")} className="btn-secondary flex-1">
               파일 다시 업로드
             </button>
-            <button onClick={() => router.push("/analysis")} className="btn-primary flex-1">
-              처음부터 다시
+            <button onClick={handleRetry} className="btn-primary flex-1">
+              이 챕터부터 재시도
             </button>
           </div>
         )}
