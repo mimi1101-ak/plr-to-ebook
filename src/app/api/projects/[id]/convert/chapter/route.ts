@@ -67,7 +67,7 @@ export async function POST(
 - 소제목 구성:${subtitleLines}
 
 ## 작성 기준
-- 분량: 2,000~3,000자
+- 분량: 4,000~6,000자 (목표: 5,500자)
 - 각 소제목(###)마다 구체적 사례와 불렛 포인트 포함
 - 문체: ${styleDescriptions[project.writingStyle] ?? styleDescriptions.professional}
 - 한국 플랫폼(인스타그램, 유튜브, 카카오톡, 네이버, 쿠팡) 사례 포함
@@ -85,7 +85,7 @@ ${originalText.slice(0, 2000)}
     const client = new Anthropic({ apiKey: apiKey.trim() });
     const response = await client.messages.create({
       model: "claude-sonnet-4-6",
-      max_tokens: 1000,
+      max_tokens: 4000,
       messages: [{ role: "user", content: prompt }],
     });
 

@@ -1,0 +1,7 @@
+{
+  "exec": "next dev -p 3333",
+  "watch": ["src", "public", "next.config.mjs"],
+  "ext": "ts,tsx,js,mjs,json,css",
+  "ignore": ["node_modules", ".next", "*.test.*"],
+  "delay": 500
+}

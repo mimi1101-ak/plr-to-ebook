@@ -5,6 +5,12 @@ import { useRouter } from "next/navigation";
 import toast from "react-hot-toast";
 import Header from "@/components/layout/Header";
 import { useAppStore } from "@/lib/store";
+import type { WritingStyle, SentenceStructure } from "@/types";
+import {
+  STYLE_LABELS,
+  STYLE_DESCRIPTIONS,
+  SENTENCE_LABELS,
+} from "@/types";
 
 interface TocChapter {
   type: "prologue" | "chapter" | "appendix";
@@ -20,11 +26,11 @@ interface TocOption {
 
 type LoadPhase = "starting" | "titles" | "toc" | "done";
 
-const POLL_INTERVAL = 5000; // 5초마다 폴링
+const POLL_INTERVAL = 2000; // 2초마다 폴링
 
 export default function TocPage() {
   const router = useRouter();
-  const { currentProjectId, targetAudience } = useAppStore();
+  const { currentProjectId, targetAudience, templateSettings, setWritingStyle, setSentenceStructure } = useAppStore();
 
   const [loadPhase, setLoadPhase] = useState<LoadPhase>("starting");
   const [titles, setTitles] = useState<string[]>([]);
@@ -63,7 +69,11 @@ export default function TocPage() {
     // 1. Job 생성 → jobId 즉시 반환
     let jobId: string;
     try {
-      const res = await fetch(`/api/projects/${projectId}/recommend/start`, { method: "POST" });
+      const res = await fetch(`/api/projects/${projectId}/recommend/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetAudience: audience }),
+    });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.message ?? "초기화 실패");
@@ -78,28 +88,18 @@ export default function TocPage() {
 
     setLoadPhase("titles");
 
-    // 2. 제목 생성 (fire-and-forget)
-    fetch(`/api/projects/${projectId}/recommend/titles`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId, targetAudience: audience }),
-    }).catch(() => {});
-
-    // 3. /api/jobs/[jobId]/status 폴링 시작
-    pollJobStatus(projectId, jobId, audience, false);
+    // 2. /api/jobs/[jobId]/status 폴링 시작
+    pollJobStatus(projectId, jobId);
   }
 
-  function pollJobStatus(
-    projectId: string,
-    jobId: string,
-    audience: string,
-    tocTriggered: boolean
-  ) {
-    const check = async (alreadyTriggered: boolean) => {
+  function pollJobStatus(projectId: string, jobId: string) {
+    const check = async () => {
       try {
         const res = await fetch(`/api/jobs/${jobId}/status`);
         if (!res.ok) throw new Error("폴링 실패");
         const data = await res.json();
+
+        console.log(`[POLL] projectId=${projectId} jobId=${jobId} status=${data.status}`, data);
 
         if (data.status === "done") {
           const r = data.result as { titles: string[]; tocOptions: TocOption[] };
@@ -115,25 +115,13 @@ export default function TocPage() {
           return;
         }
 
-        // 제목 완료 → 목차 생성 트리거 (한 번만)
-        if (data.status === "titles_done" && !alreadyTriggered) {
-          setLoadPhase("toc");
-          fetch(`/api/projects/${projectId}/recommend/toc`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ jobId, targetAudience: audience }),
-          }).catch(() => {});
-          pollTimerRef.current = setTimeout(() => check(true), POLL_INTERVAL);
-          return;
-        }
-
-        pollTimerRef.current = setTimeout(() => check(alreadyTriggered), POLL_INTERVAL);
+        pollTimerRef.current = setTimeout(check, POLL_INTERVAL);
       } catch {
-        pollTimerRef.current = setTimeout(() => check(alreadyTriggered), POLL_INTERVAL);
+        pollTimerRef.current = setTimeout(check, POLL_INTERVAL);
       }
     };
 
-    check(tocTriggered);
+    check();
   }
 
   // 제목 선택 시 editTitle 동기화
@@ -173,7 +161,12 @@ export default function TocPage() {
       const res = await fetch(`/api/projects/${currentProjectId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tocData: JSON.stringify(tocData) }),
+        body: JSON.stringify({
+          tocData: JSON.stringify(tocData),
+          writingStyle: templateSettings.writingStyle,
+          sentenceStructure: templateSettings.sentenceStructure,
+          tocFormat: templateSettings.tocFormat,
+        }),
       });
       if (!res.ok) throw new Error("저장 실패");
       toast.success("목차 확정!");
@@ -440,6 +433,55 @@ export default function TocPage() {
             </div>
           </section>
         )}
+
+        {/* ── 4. 템플릿 설정 ── */}
+        <section className="mb-8">
+          <h2 className="mb-3 flex items-center gap-2 text-sm font-bold text-gray-800">
+            <span className="flex h-5 w-5 items-center justify-center rounded-full bg-gray-800 text-white text-[10px] font-bold">4</span>
+            전자책 스타일 설정
+          </h2>
+          <div className="card space-y-5">
+            {/* 문체 */}
+            <div>
+              <p className="mb-2 text-xs font-semibold text-gray-600">문체</p>
+              <div className="grid grid-cols-2 gap-2">
+                {(["professional", "casual", "academic", "storytelling"] as WritingStyle[]).map((style) => (
+                  <button
+                    key={style}
+                    onClick={() => setWritingStyle(style)}
+                    className={`rounded-xl border-2 px-3 py-2.5 text-left transition-all ${
+                      templateSettings.writingStyle === style
+                        ? "border-purple-500 bg-purple-50"
+                        : "border-gray-100 bg-white hover:border-gray-200"
+                    }`}
+                  >
+                    <p className="text-xs font-semibold text-gray-800">{STYLE_LABELS[style]}</p>
+                    <p className="mt-0.5 text-[10px] text-gray-400">{STYLE_DESCRIPTIONS[style]}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+            {/* 문장 길이 */}
+            <div>
+              <p className="mb-2 text-xs font-semibold text-gray-600">문장 길이</p>
+              <div className="flex gap-2">
+                {(["short", "medium", "long"] as SentenceStructure[]).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setSentenceStructure(s)}
+                    className={`flex-1 rounded-xl border-2 py-2 text-xs font-medium transition-all ${
+                      templateSettings.sentenceStructure === s
+                        ? "border-purple-500 bg-purple-50 text-purple-800"
+                        : "border-gray-100 bg-white text-gray-600 hover:border-gray-200"
+                    }`}
+                  >
+                    {SENTENCE_LABELS[s]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
 
         <button
           onClick={handleConfirm}
