@@ -15,8 +15,8 @@ const styleDescriptions: Record<string, string> = {
 
 /**
  * POST /api/projects/[id]/convert/chapter
- * 챕터 하나를 생성하고 DB에 저장 후 즉시 반환.
- * max_tokens: 1000 → 생성 시간 ~3-6초 → Vercel 10초 이내.
+ * - content 파라미터 있으면: AI 호출 없이 DB 저장만 (subtitle 분할 생성 완료 후 호출)
+ * - content 없으면: 소제목 없는 챕터에 한해 직접 생성 (max_tokens 1500, ~25초)
  */
 export async function POST(
   request: NextRequest,
@@ -40,6 +40,7 @@ export async function POST(
       title,
       subtitles,
       totalChapters,
+      content: preGeneratedContent,
     }: {
       chapterIndex: number;
       type: string;
@@ -47,50 +48,60 @@ export async function POST(
       title: string;
       subtitles: string[];
       totalChapters: number;
+      content?: string;
     } = await request.json();
 
-    const originalText = ((project as any).originalText as string | null) ?? "";
     const sectionLabel =
       type === "prologue" ? "프롤로그" :
       type === "appendix" ? "부록" :
       `${number}장`;
 
-    const subtitleLines =
-      subtitles.length > 0
-        ? subtitles.map((s) => `\n- ${s}`).join("")
-        : "\n(소제목 3개를 자유롭게 구성하세요)";
+    let content: string;
 
-    const prompt = `한국의 전문 전자책 작가입니다. 전자책의 ${sectionLabel}을 작성해주세요.
+    if (preGeneratedContent !== undefined) {
+      // 소제목별 분할 생성 완료 — AI 호출 없이 저장만
+      content = preGeneratedContent;
+      console.log(`[CHAPTER] ${sectionLabel} "${title}" 저장 — ${content.length}자`);
+    } else {
+      // 소제목 없는 챕터: 직접 생성 (max_tokens 1500으로 제한)
+      const originalText = ((project as any).originalText as string | null) ?? "";
+      const subtitleLines =
+        subtitles.length > 0
+          ? subtitles.map((s) => `\n- ${s}`).join("")
+          : "\n(소제목 3개를 자유롭게 구성하세요)";
+
+      const prompt = `한국의 전문 전자책 작가입니다. 전자책의 ${sectionLabel}을 작성해주세요.
 
 ## 챕터 정보
 - 제목: ${title}
 - 소제목 구성:${subtitleLines}
 
 ## 작성 기준
-- 분량: 4,000~6,000자 (목표: 5,500자)
+- 분량: 2,500~3,000자
 - 각 소제목(###)마다 구체적 사례와 불렛 포인트 포함
-- 문체: ${styleDescriptions[project.writingStyle] ?? styleDescriptions.professional}
+- 문체: ${styleDescriptions[(project as any).writingStyle] ?? styleDescriptions.professional}
 - 한국 플랫폼(인스타그램, 유튜브, 카카오톡, 네이버, 쿠팡) 사례 포함
 - 2026년 AI·숏폼·1인 창작 경제 트렌드 반영
 - 모든 문장은 완전하게 마무리
 
 ## 원본 PLR 참고 자료
-${originalText.slice(0, 2000)}
+${originalText.slice(0, 800)}
 
 ## 출력 형식
 마크다운만 사용. "## 챕터제목" 헤더는 쓰지 말고 ### 소제목부터 시작.`;
 
-    console.log(`[CHAPTER] ${sectionLabel} "${title}" 생성 시작`);
+      console.log(`[CHAPTER] ${sectionLabel} "${title}" 생성 시작 (소제목 없음)`);
 
-    const client = new Anthropic({ apiKey: apiKey.trim() });
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 4000,
-      messages: [{ role: "user", content: prompt }],
-    });
+      const client = new Anthropic({ apiKey: apiKey.trim(), timeout: 25000 });
+      const response = await client.messages.create({
+        model: "claude-sonnet-4-6",
+        max_tokens: 1500,
+        messages: [{ role: "user", content: prompt }],
+      });
 
-    const content = response.content[0].type === "text" ? response.content[0].text.trim() : "";
-    console.log(`[CHAPTER] ${sectionLabel} "${title}" 완료 — ${content.length}자`);
+      content = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+      console.log(`[CHAPTER] ${sectionLabel} "${title}" 완료 — ${content.length}자`);
+    }
 
     // 기존 chaptersJson에 추가
     const existing = safeParseDb<any[]>((project as any).chaptersJson as string | null, []);

@@ -40,6 +40,7 @@ export default function ProcessingPage() {
   const [phase, setPhase] = useState<Phase>("idle");
   const [chapters, setChapters] = useState<ChapterTask[]>([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
+  const [currentSubtitleIndex, setCurrentSubtitleIndex] = useState(-1);
   const [doneIndexes, setDoneIndexes] = useState<Set<number>>(new Set());
   const [chapterChars, setChapterChars] = useState<Map<number, number>>(new Map());
   const [failedIndex, setFailedIndex] = useState<number | null>(null);
@@ -101,27 +102,60 @@ export default function ProcessingPage() {
     for (let i = startIndex; i < chapterList.length; i++) {
       const ch = chapterList[i];
       setCurrentIndex(i);
+      setCurrentSubtitleIndex(-1);
 
-      const result = await safePost(`/api/projects/${projectId}/convert/chapter`, {
+      let combinedContent: string | undefined;
+
+      // 소제목이 있으면 소제목별로 분할 생성
+      if (ch.subtitles.length > 0) {
+        const sections: string[] = [];
+        for (let j = 0; j < ch.subtitles.length; j++) {
+          setCurrentSubtitleIndex(j);
+          const subResult = await safePost(`/api/projects/${projectId}/convert/subtitle`, {
+            chapterTitle: ch.title,
+            subtitle: ch.subtitles[j],
+            subtitleIndex: j,
+            totalSubtitles: ch.subtitles.length,
+            sectionLabel: getSectionLabel(ch),
+          });
+
+          if (!subResult.ok) {
+            const msg = `${getSectionLabel(ch)} "${ch.title}" — "${ch.subtitles[j]}" 생성 실패: ${subResult.error}`;
+            setErrorMsg(msg);
+            setFailedIndex(i);
+            setPhase("failed");
+            toast.error(subResult.error);
+            await safePost(`/api/projects/${projectId}`, { status: "FAILED", errorMessage: subResult.error });
+            return false;
+          }
+          sections.push(subResult.data.section);
+        }
+        combinedContent = sections.join("\n\n");
+        setCurrentSubtitleIndex(-1);
+      }
+
+      // DB 저장 (소제목 없으면 chapter route에서 직접 AI 호출)
+      const saveResult = await safePost(`/api/projects/${projectId}/convert/chapter`, {
         chapterIndex: ch.index,
         type: ch.type,
         number: ch.number,
         title: ch.title,
         subtitles: ch.subtitles,
         totalChapters: chapterList.length,
+        ...(combinedContent !== undefined ? { content: combinedContent } : {}),
       });
 
-      if (!result.ok) {
-        const msg = `${getSectionLabel(ch)} 생성 실패: ${result.error}`;
+      if (!saveResult.ok) {
+        const msg = `${getSectionLabel(ch)} 저장 실패: ${saveResult.error}`;
         setErrorMsg(msg);
         setFailedIndex(i);
         setPhase("failed");
-        toast.error(result.error);
-        await safePost(`/api/projects/${projectId}`, { status: "FAILED", errorMessage: result.error });
+        toast.error(saveResult.error);
+        await safePost(`/api/projects/${projectId}`, { status: "FAILED", errorMessage: saveResult.error });
         return false;
       }
 
-      const charCount = typeof result.data.content === "string" ? result.data.content.length : 0;
+      const charCount = typeof saveResult.data.content === "string" ? saveResult.data.content.length : 0;
       setChapterChars((prev) => new Map(prev).set(i, charCount));
       setDoneIndexes((prev) => { const next = new Set(prev); next.add(i); return next; });
     }
@@ -201,7 +235,7 @@ export default function ProcessingPage() {
           {/* 진행률 바 */}
           <div className="mb-2 flex items-center justify-between text-sm">
             <span className="font-semibold text-gray-700">
-              {isFailed ? "변환 실패" : isDone ? "완료!" : phaseLabel(phase, currentIndex, chapters)}
+              {isFailed ? "변환 실패" : isDone ? "완료!" : phaseLabel(phase, currentIndex, currentSubtitleIndex, chapters)}
             </span>
             <span className={`font-bold ${
               isFailed ? "text-red-600" : isDone ? "text-green-600" : "text-brand-600"
@@ -236,7 +270,7 @@ export default function ProcessingPage() {
                 </svg>
               )}
               <p className="text-xs text-gray-600">
-                {isDone ? "모든 처리가 완료되었습니다!" : phaseLabel(phase, currentIndex, chapters)}
+                {isDone ? "모든 처리가 완료되었습니다!" : phaseLabel(phase, currentIndex, currentSubtitleIndex, chapters)}
               </p>
             </div>
           )}
@@ -317,12 +351,15 @@ function getSectionLabel(ch: ChapterTask): string {
   return `${ch.number}장.`;
 }
 
-function phaseLabel(phase: Phase, currentIndex: number, chapters: ChapterTask[]): string {
+function phaseLabel(phase: Phase, currentIndex: number, currentSubtitleIndex: number, chapters: ChapterTask[]): string {
   if (phase === "starting") return "챕터 구조 초기화 중...";
   if (phase === "finishing") return "최종 조립 중...";
   if (phase === "generating" && chapters[currentIndex]) {
     const ch = chapters[currentIndex];
-    return `${getSectionLabel(ch)} "${ch.title}" 생성 중...`;
+    if (currentSubtitleIndex >= 0 && ch.subtitles[currentSubtitleIndex]) {
+      return `${getSectionLabel(ch)} "${ch.title}" — "${ch.subtitles[currentSubtitleIndex]}" 생성 중... (${currentSubtitleIndex + 1}/${ch.subtitles.length})`;
+    }
+    return `${getSectionLabel(ch)} "${ch.title}" 저장 중...`;
   }
   return "준비 중...";
 }
