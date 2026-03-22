@@ -56,40 +56,56 @@ export default function TocPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProjectId, targetAudience]);
 
-  async function startRecommend(projectId: string, audience: string) {
+  async function safePost(url: string, body: object): Promise<{ ok: true; data: any } | { ok: false; error: string }> {
     try {
-      // 1. Job 생성
-      const startRes = await fetch(`/api/projects/${projectId}/recommend/start`, { method: "POST" });
-      if (!startRes.ok) throw new Error((await startRes.json()).message ?? "초기화 실패");
-      const { jobId } = await startRes.json();
-
-      // 2. 제목 생성 (직접 await, Vercel에서 안전)
-      setLoadPhase("titles");
-      const titlesRes = await fetch(`/api/projects/${projectId}/recommend/titles`, {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId, targetAudience: audience }),
+        body: JSON.stringify(body),
       });
-      if (!titlesRes.ok) throw new Error((await titlesRes.json()).message ?? "제목 생성 실패");
-      const { titles: fetchedTitles } = await titlesRes.json();
-      setTitles(fetchedTitles ?? []);
-
-      // 3. 목차 생성 (직접 await, Vercel에서 안전)
-      setLoadPhase("toc");
-      const tocRes = await fetch(`/api/projects/${projectId}/recommend/toc`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId, targetAudience: audience, titles: fetchedTitles }),
-      });
-      if (!tocRes.ok) throw new Error((await tocRes.json()).message ?? "목차 생성 실패");
-      const { tocOptions: fetchedToc } = await tocRes.json();
-      setTocOptions(fetchedToc ?? []);
-
-      setLoadPhase("done");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "추천 생성 실패");
-      router.push("/analysis");
+      const text = await res.text();
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        // Vercel이 "An error occurred" 같은 HTML/텍스트 반환 시
+        return { ok: false, error: "처리 시간이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요." };
+      }
+      if (!res.ok) {
+        const msg = data?.message;
+        const isTimeout = res.status === 504 || res.status === 408;
+        return { ok: false, error: isTimeout || !msg ? "처리 시간이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요." : msg };
+      }
+      return { ok: true, data };
+    } catch {
+      return { ok: false, error: "처리 시간이 오래 걸리고 있어요. 잠시 후 다시 시도해주세요." };
     }
+  }
+
+  async function startRecommend(projectId: string, audience: string) {
+    // 1. Job 생성
+    const startResult = await safePost(`/api/projects/${projectId}/recommend/start`, {});
+    if (!startResult.ok) { toast.error(startResult.error); router.push("/analysis"); return; }
+    const { jobId } = startResult.data;
+
+    // 2. 제목 생성
+    setLoadPhase("titles");
+    const titlesResult = await safePost(`/api/projects/${projectId}/recommend/titles`, {
+      jobId, targetAudience: audience,
+    });
+    if (!titlesResult.ok) { toast.error(titlesResult.error); router.push("/analysis"); return; }
+    const fetchedTitles: string[] = titlesResult.data.titles ?? [];
+    setTitles(fetchedTitles);
+
+    // 3. 목차 생성
+    setLoadPhase("toc");
+    const tocResult = await safePost(`/api/projects/${projectId}/recommend/toc`, {
+      jobId, targetAudience: audience, titles: fetchedTitles,
+    });
+    if (!tocResult.ok) { toast.error(tocResult.error); router.push("/analysis"); return; }
+    setTocOptions(tocResult.data.tocOptions ?? []);
+
+    setLoadPhase("done");
   }
 
   // 제목 선택 시 editTitle 동기화

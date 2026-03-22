@@ -55,6 +55,13 @@ export async function POST(
     });
 
     const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+
+    // JSON 유효성 검사
+    if (!raw || raw.length < 5) {
+      console.error("[RECOMMEND/TOC] 빈 응답. raw:", raw);
+      throw new Error("AI 응답이 비어있습니다");
+    }
+
     const tocOptions = parseTocOptions(raw);
 
     if (tocOptions.length === 0) {

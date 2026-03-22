@@ -39,24 +39,26 @@ export async function POST(
       ((project as any).originalText as string | null ?? "")
     ).slice(0, 300);
 
-    const client = new Anthropic({ apiKey: apiKey.trim(), timeout: 45000 });
+    const client = new Anthropic({ apiKey: apiKey.trim(), timeout: 25000 });
 
     console.log(`[RECOMMEND/TITLES] 제목 생성 시작`);
     const response = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 400,
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 300,
       messages: [{
         role: "user",
-        content: `"${targetAudience}" 독자를 위한 전자책 제목 10개를 아래 형식의 JSON 배열로만 출력하라. 각 제목 20자 이내.
-
-원고 요약: ${summary}
-
-출력 형식:
-["제목1","제목2","제목3","제목4","제목5","제목6","제목7","제목8","제목9","제목10"]${JSON_ONLY}`,
+        content: `"${targetAudience}"용 전자책 제목 10개를 JSON 배열로만 출력. 각 20자 이내.\n요약: ${summary.slice(0, 150)}\n["제목1","제목2","제목3","제목4","제목5","제목6","제목7","제목8","제목9","제목10"]${JSON_ONLY}`,
       }],
     });
 
     const raw = response.content[0].type === "text" ? response.content[0].text.trim() : "";
+
+    // JSON 유효성 검사
+    if (!raw || raw.length < 5) {
+      console.error("[RECOMMEND/TITLES] 빈 응답. raw:", raw);
+      throw new Error("AI 응답이 비어있습니다");
+    }
+
     const titles = parseTitles(raw);
 
     if (titles.length === 0) {
