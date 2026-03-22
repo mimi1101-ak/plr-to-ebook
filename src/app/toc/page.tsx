@@ -26,8 +26,6 @@ interface TocOption {
 
 type LoadPhase = "starting" | "titles" | "toc" | "done";
 
-const POLL_INTERVAL = 2000; // 2초마다 폴링
-
 export default function TocPage() {
   const router = useRouter();
   const { currentProjectId, targetAudience, templateSettings, setWritingStyle, setSentenceStructure } = useAppStore();
@@ -48,13 +46,6 @@ export default function TocPage() {
   const [isSaving, setIsSaving] = useState(false);
 
   const calledRef = useRef(false);
-  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
-    };
-  }, []);
 
   useEffect(() => {
     if (!currentProjectId) { router.push("/upload"); return; }
@@ -66,62 +57,39 @@ export default function TocPage() {
   }, [currentProjectId, targetAudience]);
 
   async function startRecommend(projectId: string, audience: string) {
-    // 1. Job 생성 → jobId 즉시 반환
-    let jobId: string;
     try {
-      const res = await fetch(`/api/projects/${projectId}/recommend/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetAudience: audience }),
-    });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message ?? "초기화 실패");
-      }
-      const data = await res.json();
-      jobId = data.jobId;
+      // 1. Job 생성
+      const startRes = await fetch(`/api/projects/${projectId}/recommend/start`, { method: "POST" });
+      if (!startRes.ok) throw new Error((await startRes.json()).message ?? "초기화 실패");
+      const { jobId } = await startRes.json();
+
+      // 2. 제목 생성 (직접 await, Vercel에서 안전)
+      setLoadPhase("titles");
+      const titlesRes = await fetch(`/api/projects/${projectId}/recommend/titles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, targetAudience: audience }),
+      });
+      if (!titlesRes.ok) throw new Error((await titlesRes.json()).message ?? "제목 생성 실패");
+      const { titles: fetchedTitles } = await titlesRes.json();
+      setTitles(fetchedTitles ?? []);
+
+      // 3. 목차 생성 (직접 await, Vercel에서 안전)
+      setLoadPhase("toc");
+      const tocRes = await fetch(`/api/projects/${projectId}/recommend/toc`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, targetAudience: audience, titles: fetchedTitles }),
+      });
+      if (!tocRes.ok) throw new Error((await tocRes.json()).message ?? "목차 생성 실패");
+      const { tocOptions: fetchedToc } = await tocRes.json();
+      setTocOptions(fetchedToc ?? []);
+
+      setLoadPhase("done");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "초기화 실패");
+      toast.error(e instanceof Error ? e.message : "추천 생성 실패");
       router.push("/analysis");
-      return;
     }
-
-    setLoadPhase("titles");
-
-    // 2. /api/jobs/[jobId]/status 폴링 시작
-    pollJobStatus(projectId, jobId);
-  }
-
-  function pollJobStatus(projectId: string, jobId: string) {
-    const check = async () => {
-      try {
-        const res = await fetch(`/api/jobs/${jobId}/status`);
-        if (!res.ok) throw new Error("폴링 실패");
-        const data = await res.json();
-
-        console.log(`[POLL] projectId=${projectId} jobId=${jobId} status=${data.status}`, data);
-
-        if (data.status === "done") {
-          const r = data.result as { titles: string[]; tocOptions: TocOption[] };
-          setTitles(r.titles ?? []);
-          setTocOptions(r.tocOptions ?? []);
-          setLoadPhase("done");
-          return;
-        }
-
-        if (data.status === "failed") {
-          toast.error(data.error ?? "추천 생성에 실패했습니다.");
-          router.push("/analysis");
-          return;
-        }
-
-        pollTimerRef.current = setTimeout(check, POLL_INTERVAL);
-      } catch {
-        pollTimerRef.current = setTimeout(check, POLL_INTERVAL);
-      }
-    };
-
-    check();
   }
 
   // 제목 선택 시 editTitle 동기화
